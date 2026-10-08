@@ -1,0 +1,13 @@
+# Local campaign workspace. Curated, reproducible evidence lives under result/.
+runs/
+*.log
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Never commit credentials or local key material.
+*.env
+.env.*
+*.key
+*api-key*
+**/secrets/
