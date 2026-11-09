@@ -22,8 +22,8 @@ if ROOT not in sys.path:
 
 from cosa import (Analyzer, Budgets, CampaignConfig, ContextLibrary,  # noqa: E402
                   CoSACampaign, LLMConfig, OpenAICompatClient)
-from cosa.llm_agents import (LLMDispatcher, LLMGenerator, LLMGrafter,  # noqa: E402
-                             LLMJudge, LLMReflector)
+from cosa.llm_agents import (HybridJudge, LLMDispatcher, LLMGenerator,  # noqa: E402
+                             LLMGrafter, LLMReflector)
 from targets import make_llm_tester_policy, make_llm_validator_policy  # noqa: E402
 from targets import self_collab as sc  # noqa: E402
 from targets import tracedev as td  # noqa: E402
@@ -53,7 +53,7 @@ def build_campaign(target, ds):
         grafter_factory=lambda mdg: LLMGrafter(mdg, ds),       # DeepSeek
         dispatcher=LLMDispatcher(ds),                          # DeepSeek
         generator=LLMGenerator(ds),                            # DeepSeek
-        judge=LLMJudge(ds),                                    # DeepSeek
+        judge=HybridJudge(ds),             # deterministic verdicts + DeepSeek rationale
         reflector=LLMReflector(ds),                            # DeepSeek
     )
 

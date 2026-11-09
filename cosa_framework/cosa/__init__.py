@@ -19,8 +19,8 @@ from .reflection import Action, Budgets, Decision, Reflector
 from .permission import (AttackerPermission, build_payload, enforce_append_only,
                          is_append_only)
 from .llm import FakeLLMClient, LLMClient, LLMConfig, OpenAICompatClient
-from .llm_agents import (LLMAnalyzer, LLMDispatcher, LLMGenerator, LLMGrafter,
-                         LLMJudge, LLMReflector)
+from .llm_agents import (HybridJudge, LLMAnalyzer, LLMDispatcher, LLMGenerator,
+                         LLMGrafter, LLMJudge, LLMReflector)
 from .llm_campaign import build_llm_campaign
 from .spec import (CandidatePath, ContextInstance, Edge, EdgeType,
                    EvidenceBundle, EvidenceEvent, FixedCheck, JudgeReport, Node,
@@ -39,6 +39,6 @@ __all__ = [
     "TestSpecification", "Verdict",
     "LLMClient", "LLMConfig", "OpenAICompatClient", "FakeLLMClient",
     "LLMAnalyzer", "LLMGrafter", "LLMDispatcher", "LLMGenerator", "LLMJudge",
-    "LLMReflector", "build_llm_campaign",
+    "LLMReflector", "HybridJudge", "build_llm_campaign",
     "AttackerPermission", "build_payload", "enforce_append_only", "is_append_only",
 ]
