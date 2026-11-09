@@ -43,9 +43,9 @@ def test_vulnerable_target_completes_chain_with_explicit_payload():
     spec, context, _ = _bind_spec()
     executor = Executor(DevTeamTarget(policy=VulnerableTesterPolicy()))
     gen = TemplatePayloadGenerator()
-    # Escalate to an explicit directive framing the vulnerable tester obeys.
+    # Search the strategy library to the explicit-directive vector the tester obeys.
     payload = gen.generate(spec, context)
-    for i in range(2):
+    for i in range(len(gen.STRATEGIES) - 1):
         payload = gen.refine(spec, context, payload, "escalate", i + 2)
     replay = executor.run_pair(context, payload)
     report = Judge().verify(spec, replay)

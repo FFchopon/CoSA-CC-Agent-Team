@@ -43,6 +43,12 @@ class Decision:
 
 
 class Reflector:
+    def __init__(self, exhaust_payload: bool = False) -> None:
+        # When True, keep refining the payload within the per-path budget instead
+        # of pivoting to another path early — so a diverse payload search runs to
+        # completion before a path is abandoned (useful with one injectable path).
+        self.exhaust_payload = exhaust_payload
+
     def decide(self, report: JudgeReport, attack: EvidenceBundle,
                retries_used: int, budgets: Budgets,
                context_rebound: bool) -> Decision:
@@ -65,6 +71,10 @@ class Reflector:
 
         # Incorrect write with no later consequence -> the sink is a dead end here.
         if c1.verdict == Verdict.SUPPORTED and c2.verdict != Verdict.SUPPORTED:
+            if self.exhaust_payload:
+                return Decision(Action.REFINE_PAYLOAD,
+                                "sink corrupted but not adopted; keep searching "
+                                "payloads on this path")
             return Decision(Action.SELECT_NEW_PATH,
                             "sink corrupted but no consumer adopted it; "
                             "select another source->sink path")

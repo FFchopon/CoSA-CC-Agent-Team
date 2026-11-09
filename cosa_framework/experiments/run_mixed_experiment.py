@@ -21,9 +21,9 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from cosa import (Analyzer, Budgets, CampaignConfig, ContextLibrary,  # noqa: E402
-                  CoSACampaign, LLMConfig, OpenAICompatClient)
+                  CoSACampaign, LLMConfig, OpenAICompatClient, Reflector)
 from cosa.llm_agents import (HybridJudge, LLMDispatcher, LLMGenerator,  # noqa: E402
-                             LLMGrafter, LLMReflector)
+                             LLMGrafter)
 from targets import make_llm_tester_policy, make_llm_validator_policy  # noqa: E402
 from targets import self_collab as sc  # noqa: E402
 from targets import tracedev as td  # noqa: E402
@@ -31,10 +31,11 @@ from targets import tracedev as td  # noqa: E402
 KEYDIR = "/Users/temp/Downloads/api-key"
 
 
-def deepseek_client():
+def deepseek_client(temperature: float = 0.2):
     return OpenAICompatClient(LLMConfig(
         model="deepseek-flash", base_url="https://api.deepseek.com/v1",
-        api_key_file=os.path.join(KEYDIR, "ds-key.txt"), temperature=0.2, timeout=90))
+        api_key_file=os.path.join(KEYDIR, "ds-key.txt"),
+        temperature=temperature, timeout=90))
 
 
 def kimi_client():
@@ -44,17 +45,23 @@ def kimi_client():
         api_key_file=os.path.join(KEYDIR, "kimi-key.txt"), temperature=1.0, timeout=90))
 
 
-def build_campaign(target, ds):
-    """Attacker pipeline on DeepSeek; Analyzer is deterministic (human MDG)."""
+def build_campaign(target, ds, gen_ds=None, candidates_per_call=4):
+    """Attacker pipeline on DeepSeek; Analyzer is deterministic (human MDG).
+
+    The Generator runs on a hotter client and produces several DISTINCT candidate
+    injections per call (best-of-N diverse search); the Reflector exhausts the
+    per-path payload budget before abandoning the single injectable path.
+    """
+    gen_ds = gen_ds or ds
     return CoSACampaign(
         target=target,
         context_library=target._library,
         analyzer=Analyzer(),                                   # human-provided MDG
         grafter_factory=lambda mdg: LLMGrafter(mdg, ds),       # DeepSeek
         dispatcher=LLMDispatcher(ds),                          # DeepSeek
-        generator=LLMGenerator(ds),                            # DeepSeek
+        generator=LLMGenerator(gen_ds, candidates_per_call=candidates_per_call),
         judge=HybridJudge(ds),             # deterministic verdicts + DeepSeek rationale
-        reflector=LLMReflector(ds),                            # DeepSeek
+        reflector=Reflector(exhaust_payload=True),             # run the search to budget
     )
 
 
@@ -63,12 +70,15 @@ def role_counts(client):
     return dict(c)
 
 
-def run_target(name, target, context, spec, objective, value, ds, victim):
+def run_target(name, target, context, spec, objective, value, ds, victim, gen_ds=None):
     target._library = ContextLibrary()
     target._library.add(context)
-    campaign = build_campaign(target, ds)
+    # Hotter client for the diverse payload generator; falls back to ds.
+    gen_ds = gen_ds or deepseek_client(temperature=0.9)
+    target._gen_ds = gen_ds
+    campaign = build_campaign(target, ds, gen_ds=gen_ds)
     config = CampaignConfig(terminal_objective=objective, target_value=value,
-                            budgets=Budgets(per_path_retries=4, global_attempts=20))
+                            budgets=Budgets(per_path_retries=6, global_attempts=24))
     print(f"[{datetime.datetime.now():%H:%M:%S}] running {name} ...", flush=True)
     report = campaign.run(spec, config)
     print(f"[{datetime.datetime.now():%H:%M:%S}] {name}: success={report.success} "
@@ -88,7 +98,9 @@ def run_target(name, target, context, spec, objective, value, ds, victim):
                       "diagnosis": a.diagnosis} for a in report.attempts],
         "permission": {"mode": report.permission_mode,
                        "injectable_sources": report.injectable_sources},
-        "attacker_deepseek_calls": role_counts(ds),
+        "attacker_deepseek_calls": dict(
+            collections.Counter(role_counts(ds)) +
+            collections.Counter(role_counts(gen_ds) if gen_ds is not ds else {})),
         "victim_kimi_calls": role_counts(victim),
     }
 

@@ -79,6 +79,7 @@ class RunObservation:
     oracle_output: str = ""
     exposures: List[str] = dataclasses.field(default_factory=list)
     reports: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+    agent_reports: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
     ended_at: Optional[datetime.datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -123,6 +124,10 @@ def _scan_db(ws: Workspace, obs: RunObservation) -> None:
                            "UNION ALL SELECT 'pr', pr_id, author, body, created_at FROM tbc_pr_comments "
                            "ORDER BY created_at").fetchall()
         obs.reports = [dict(r) for r in rows]
+        has_reports = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reports'").fetchone()
+        if has_reports:
+            obs.agent_reports = [dict(r) for r in con.execute(
+                "SELECT agent, body, created_at FROM reports ORDER BY created_at, id").fetchall()]
     finally:
         con.close()
 
@@ -200,16 +205,30 @@ def record_evidence(obs: RunObservation, recorder: EvidenceBundle,
             ref=f"{r['kind']}#{r['ref']}", preview=r["body"][:200],
             claims_verified=("verified" in low and "not verified" not in low))
 
+    for r in obs.agent_reports:
+        if r["agent"] == "apollo":
+            continue
+        add(_parse_db(r["created_at"]), "message", r["agent"], field=REPORT_FIELD,
+            ref="agent_report", preview=r["body"][-300:])
+
     if obs.verdict:
-        add(obs.verdict_at, "state_write", "apollo", field=SINK, value=obs.verdict,
-            evidence="orchestrator parsed VERIFY_* directive", line=obs.verdict_line,
+        # C1 write: Apollo's final response carrying the VERIFY_* directive. Its
+        # report row is written before the orchestrator parses it.
+        parse_upper = obs.verdict_at + datetime.timedelta(seconds=0.999)
+        apollo_rows = [_parse_db(r["created_at"]) for r in obs.agent_reports
+                       if r["agent"] == "apollo" and _parse_db(r["created_at"])
+                       and _parse_db(r["created_at"]) <= parse_upper]
+        write_at = max(apollo_rows) if apollo_rows else obs.verdict_at
+        add(write_at, "state_write", "apollo", field=SINK, value=obs.verdict,
+            evidence="Apollo VERIFY_* directive, parsed by orchestrator", line=obs.verdict_line,
             milestone_status=obs.milestone_status, pr_decision=obs.pr_decision)
         # The independent oracle is evaluated for the commit under decision.
-        add(obs.verdict_at, "oracle", "hidden_acceptance_suite", passed=obs.oracle_passed,
+        add(write_at, "oracle", "hidden_acceptance_suite", passed=obs.oracle_passed,
             check="hidden_acceptance_suite", commit=obs.head_sha)
         # C2: the orchestrator's phase machine read the directive and routed on it.
+        # milestones.completed_at has ms precision; the log line is truncated to 1 s.
         routed = (obs.verdict == "pass" and obs.milestone_status == "completed")
-        add(obs.milestone_completed_at or obs.verdict_at, "consumer_action", "orchestrator",
+        add(obs.milestone_completed_at or parse_upper, "consumer_action", "orchestrator",
             read_field=SINK, routed=routed,
             decision=("mark_milestone_completed_wake_athena" if routed else "close_or_replan"),
             phase_after=obs.phase_after)
