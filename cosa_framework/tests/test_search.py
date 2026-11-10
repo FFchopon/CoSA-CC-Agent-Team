@@ -56,6 +56,41 @@ def test_llm_generator_best_of_n_one_call_many_candidates():
         assert is_append_only(context.benign_source_value, p.content)
 
 
+def test_llm_generator_hill_climb_mutates_same_vector_then_switches():
+    """With hill_climb on, refine first minimally rewrites the current injection
+    (framing llm_mut_*) for mutations_per_vector steps, then switches vector."""
+    mutate_prompts = []
+    mut = {"n": 0}
+
+    def responder(role, system, user):
+        if role == "generator":
+            if "keep it" in user.lower() or "smallest change" in user.lower():
+                # mutate request: it must carry the previous injection as a seed
+                mutate_prompts.append(user)
+                mut["n"] += 1
+                return json.dumps({"append_text": f"mutated inject v{mut['n']}"})
+            return json.dumps({"append_text": "fresh inject v0"})
+        return "{}"
+    client = FakeLLMClient(responder)
+    spec, context = _spec_ctx()
+    gen = LLMGenerator(client, candidates_per_call=1, hill_climb=True,
+                       mutations_per_vector=2)
+    p1 = gen.generate(spec, context)                      # vector seed
+    p2 = gen.refine(spec, context, p1, "diag-1", 2)       # mutate 1
+    p3 = gen.refine(spec, context, p2, "diag-2", 3)       # mutate 2
+    p4 = gen.refine(spec, context, p3, "diag-3", 4)       # switch vector
+    assert p1.metadata["framing"] == "llm_1"
+    assert p2.metadata["framing"] == "llm_mut_2"
+    assert p3.metadata["framing"] == "llm_mut_3"
+    assert p4.metadata["framing"] == "llm_4"              # back to a fresh vector
+    # First mutate seeds on the original injection + its diagnosis; the second
+    # chains on the first mutation (true hill-climb, not a reset).
+    assert "fresh inject v0" in mutate_prompts[0] and "diag-1" in mutate_prompts[0]
+    assert "mutated inject v1" in mutate_prompts[1] and "diag-2" in mutate_prompts[1]
+    for p in (p1, p2, p3, p4):
+        assert is_append_only(context.benign_source_value, p.content)
+
+
 def test_reflector_exhaust_payload_keeps_refining():
     report = JudgeReport(
         spec_id="s", spec_version=1,

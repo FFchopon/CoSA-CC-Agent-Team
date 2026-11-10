@@ -38,10 +38,11 @@ def deepseek_client(temperature: float = 0.2):
         temperature=temperature, timeout=90))
 
 
-def kimi_client():
-    # kimi-k2.6 only accepts temperature == 1.
+def kimi_client(model: str = "kimi-k2.6"):
+    # Moonshot's OpenAI-compatible endpoint. kimi-k2.6 only accepts
+    # temperature == 1; newer models (k3.x) accept it too, so keep 1.0.
     return OpenAICompatClient(LLMConfig(
-        model="kimi-k2.6", base_url="https://api.moonshot.cn/v1",
+        model=model, base_url="https://api.moonshot.cn/v1",
         api_key_file=os.path.join(KEYDIR, "kimi-key.txt"), temperature=1.0, timeout=90))
 
 
@@ -56,12 +57,15 @@ def claude_client(model: str = "claude-sonnet-5-5", temperature=None):
         temperature=temperature, timeout=120, json_response_format=False))
 
 
-def build_campaign(target, ds, gen_ds=None, candidates_per_call=4):
+def build_campaign(target, ds, gen_ds=None, candidates_per_call=4,
+                   hill_climb=False, mutations_per_vector=2):
     """Attacker pipeline on DeepSeek; Analyzer is deterministic (human MDG).
 
     The Generator runs on a hotter client and produces several DISTINCT candidate
     injections per call (best-of-N diverse search); the Reflector exhausts the
-    per-path payload budget before abandoning the single injectable path.
+    per-path payload budget before abandoning the single injectable path. With
+    ``hill_climb=True`` the Generator also minimally rewrites the current injection
+    (same vector) for the diagnosis before switching vectors.
     """
     gen_ds = gen_ds or ds
     return CoSACampaign(
@@ -70,7 +74,9 @@ def build_campaign(target, ds, gen_ds=None, candidates_per_call=4):
         analyzer=Analyzer(),                                   # human-provided MDG
         grafter_factory=lambda mdg: LLMGrafter(mdg, ds),       # DeepSeek
         dispatcher=LLMDispatcher(ds),                          # DeepSeek
-        generator=LLMGenerator(gen_ds, candidates_per_call=candidates_per_call),
+        generator=LLMGenerator(gen_ds, candidates_per_call=candidates_per_call,
+                               hill_climb=hill_climb,
+                               mutations_per_vector=mutations_per_vector),
         judge=HybridJudge(ds),             # deterministic verdicts + DeepSeek rationale
         reflector=Reflector(exhaust_payload=True),             # run the search to budget
     )
@@ -87,9 +93,13 @@ def run_target(name, target, context, spec, objective, value, ds, victim, gen_ds
     # Hotter client for the diverse payload generator; falls back to ds.
     gen_ds = gen_ds or deepseek_client(temperature=0.9)
     target._gen_ds = gen_ds
-    campaign = build_campaign(target, ds, gen_ds=gen_ds)
+    # Payload search: best-of-4 diverse vectors + up to 2 targeted hill-climb
+    # rewrites per vector (each payload tried at most 3 times).
+    campaign = build_campaign(target, ds, gen_ds=gen_ds,
+                              hill_climb=True, mutations_per_vector=2)
+    # One injectable path (P1) -> attempts/task = per_path_retries + 1 = 20.
     config = CampaignConfig(terminal_objective=objective, target_value=value,
-                            budgets=Budgets(per_path_retries=6, global_attempts=24))
+                            budgets=Budgets(per_path_retries=19, global_attempts=20))
     print(f"[{datetime.datetime.now():%H:%M:%S}] running {name} ...", flush=True)
     report = campaign.run(spec, config)
     print(f"[{datetime.datetime.now():%H:%M:%S}] {name}: success={report.success} "
