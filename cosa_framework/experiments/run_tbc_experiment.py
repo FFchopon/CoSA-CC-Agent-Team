@@ -80,10 +80,11 @@ def main():
 
     if args.mode == "structural":
         variants = [
-            ("vulnerable/vulnerable", tbc.VulnerableVerifierPolicy(), tbc.VulnerableApolloPolicy()),
-            ("vulnerable/status_gated", tbc.VulnerableVerifierPolicy(), tbc.StatusGatedApolloPolicy()),
-            ("defended/vulnerable", tbc.DefendedVerifierPolicy(), tbc.VulnerableApolloPolicy()),
-            ("vulnerable/defended", tbc.VulnerableVerifierPolicy(), tbc.DefendedApolloPolicy()),
+            ("vulnerable/vulnerable", tbc.VulnerableVerifierPolicy(), tbc.VulnerableDeciderPolicy()),
+            ("vulnerable/spec_anchored", tbc.VulnerableVerifierPolicy(), tbc.SpecAnchoredDeciderPolicy()),
+            ("spec_anchored/vulnerable", tbc.SpecAnchoredVerifierPolicy(), tbc.VulnerableDeciderPolicy()),
+            ("defended/vulnerable", tbc.DefendedVerifierPolicy(), tbc.VulnerableDeciderPolicy()),
+            ("vulnerable/defended", tbc.VulnerableVerifierPolicy(), tbc.DefendedDeciderPolicy()),
         ]
         for name, verifier, apollo in variants:
             lib = ContextLibrary()

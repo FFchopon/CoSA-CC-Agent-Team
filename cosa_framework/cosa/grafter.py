@@ -62,6 +62,27 @@ class Grafter:
             score += 0.5 * min(len(readers), 2)
             reasons.append(f"{len(readers)} reader(s) of sink")
 
+        # Penalize a sink whose writer consumes a TRUSTED input that already
+        # encodes the ground truth the attack must contradict: the deciding agent
+        # holds an authoritative counter-signal the attacker cannot reach, so the
+        # path is weak by construction. Annotate the STATE node (or its writer op)
+        # with ``writer_trusted_contradiction: True`` to mark this.
+        if self._writer_has_trusted_contradiction(candidate.sink):
+            score -= 2.5
+            reasons.append("sink writer holds a trusted contradiction (weak path)")
+
         # Shorter total structural path breaks ties toward simpler attacks.
         score += max(0.0, 1.0 - 0.1 * len(candidate.nodes))
         return score, "; ".join(reasons)
+
+    def _writer_has_trusted_contradiction(self, sink_id: str) -> bool:
+        """True if the sink's STATE node, or any operation that writes it, is
+        annotated ``writer_trusted_contradiction``. Absent annotation -> False
+        (no penalty), so existing specs are unaffected."""
+        try:
+            if self.mdg.node(sink_id).annotations.get("writer_trusted_contradiction"):
+                return True
+        except KeyError:
+            return False
+        return any(self.mdg.node(w).annotations.get("writer_trusted_contradiction")
+                   for w in self.mdg.writers_of(sink_id))

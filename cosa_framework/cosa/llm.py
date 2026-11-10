@@ -18,6 +18,7 @@ import dataclasses
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -33,6 +34,12 @@ class LLMConfig:
     api_key_file: Optional[str] = None       # else read this file
     temperature: float = 0.2
     timeout: int = 60
+    max_retries: int = 6          # retry on HTTP 429 (rate limit) with backoff
+    retry_base: float = 20.0      # base backoff seconds (e.g. RPM=3 -> ~20s/request)
+    # Some OpenAI-compatible endpoints reject response_format={"type":"json_object"}
+    # (Anthropic's compat layer wants json_schema). Set False to ask for JSON by
+    # prompt only; complete_json then parses the returned text (fences tolerated).
+    json_response_format: bool = True
 
     def resolve_key(self) -> str:
         if self.api_key:
@@ -90,21 +97,32 @@ class OpenAICompatClient(LLMClient):
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
         }
-        if json_mode:
+        if json_mode and self.config.json_response_format:
             payload["response_format"] = {"type": "json_object"}
         body = json.dumps(payload).encode()
         request = urllib.request.Request(
             self.config.base_url.rstrip("/") + "/chat/completions", data=body,
             headers={"Authorization": "Bearer " + key,
                      "Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
-                data = json.loads(response.read().decode())
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:500]
-            raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"LLM connection failed: {exc.reason}") from exc
+        attempt = 0
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
+                    data = json.loads(response.read().decode())
+                break
+            except urllib.error.HTTPError as exc:
+                # Retry on rate limit (429) with backoff; honor Retry-After if sent.
+                if exc.code == 429 and attempt < self.config.max_retries:
+                    ra = exc.headers.get("Retry-After") if exc.headers else None
+                    delay = (float(ra) if ra and str(ra).strip().replace(".", "", 1).isdigit()
+                             else self.config.retry_base * (1.5 ** attempt))
+                    time.sleep(min(delay, 90.0))
+                    attempt += 1
+                    continue
+                detail = exc.read().decode(errors="replace")[:500]
+                raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
+            except urllib.error.URLError as exc:
+                raise RuntimeError(f"LLM connection failed: {exc.reason}") from exc
         content = data["choices"][0]["message"]["content"]
         self._record(role, system, user, content, self.config.model)
         return content
