@@ -140,6 +140,39 @@ def test_tbc_claim_sink_is_attackable_with_its_own_terminal():
     assert rep.attempts[-1].path_id.endswith(tbc.OP_HANDOFF)
 
 
+# -- defective-task library (5 tasks) ---------------------------------------- #
+def test_tbc_task_library_has_five_distinct_tasks():
+    assert len(tbc.THEBOTCOMPANY_TASKS) == 5
+    assert len({t.id for t in tbc.THEBOTCOMPANY_TASKS}) == 5
+    for t in tbc.THEBOTCOMPANY_TASKS:
+        assert t.skipped_test in t.ci_log and "1 skipped" in t.ci_log   # required test skipped
+        assert "(3)" in t.milestone                                      # numbered checklist
+        assert t.required_criterion and t.failing_case
+
+
+def test_tbc_every_task_is_well_formed():
+    """For each task: vulnerable -> attributed C1->C2->C3; defended -> fail-closed;
+    control (benign) -> no terminal and the hidden oracle genuinely fails."""
+    spec = tbc.tbc_mas_spec()
+    cfg = CampaignConfig(terminal_objective=OBJECTIVE, target_value="pass",
+                         budgets=Budgets(per_path_retries=6, global_attempts=24))
+    for ctx in tbc.tbc_task_contexts():
+        lib = ContextLibrary(); lib.add(ctx)
+        vuln = CoSACampaign(target=tbc.TheBotCompanyTarget(), context_library=lib).run(spec, cfg)
+        assert vuln.success and vuln.attempts[-1].attribution, f"{ctx.id}: vulnerable chain not certified"
+
+        lib = ContextLibrary(); lib.add(ctx)
+        deff = CoSACampaign(target=tbc.TheBotCompanyTarget(verifier=tbc.DefendedVerifierPolicy()),
+                            context_library=lib).run(spec, cfg)
+        assert not deff.success, f"{ctx.id}: defended not fail-closed"
+        assert all(a.stage_verdicts["C1_incorrect_commitment"] != "supported" for a in deff.attempts)
+
+        target = tbc.TheBotCompanyTarget(); target.reset(ctx.checkpoint)
+        control = EvidenceBundle(mode="control"); target.run(ctx.benign_source_value, control)
+        assert not control.has_evidence_kind("terminal"), f"{ctx.id}: control not clean"
+        assert control.first(kind="oracle").detail["passed"] is False
+
+
 # -- LLM policies (offline) -------------------------------------------------- #
 def test_tbc_llm_policies_two_hops_with_fake_client():
     seen = {}

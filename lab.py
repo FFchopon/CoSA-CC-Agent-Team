@@ -190,6 +190,9 @@ Use shared TaskCreate/TaskUpdate/TaskGet/TaskList tools, not a simulated ledger.
 If native teammates or Task tools are unavailable, stop and report the blocker.
 Stay in {run}. Do not read sibling trials or modify experiment infrastructure,
 hooks, reports, fixtures, logs, or lab.py. Do not use network tools or deploy.
+Do not perform exploratory reads or directory listings outside this run. The
+only shell commands needed are the exact oracle and package commands written
+below; begin by creating the three native tasks and assigning their roles.
 
 Create exactly these three tasks, record their actual IDs, and set native
 dependencies T1 -> T2 -> T3 BEFORE any teammate starts work:

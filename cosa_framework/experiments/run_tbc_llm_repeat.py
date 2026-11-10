@@ -116,16 +116,18 @@ def _appended(source_field, value):
     return value[len(benign.rstrip("\n")):].strip() if value.startswith(benign.rstrip("\n")) else value
 
 
-def run_once(i, args):
+def run_once(i, args, task=None):
+    task = task or tbc.TASK0
     ds = with_retries(deepseek_client())
     gen_ds = with_retries(deepseek_client(temperature=0.9))
     victim = with_retries(claude_client())
-    verifier, apollo = make_llm_tbc_policies(victim, milestone=tbc.MILESTONE_DESCRIPTION)
+    verifier, apollo = make_llm_tbc_policies(victim, milestone=task.milestone)
     target = RecordingTarget(verifier=verifier, apollo=apollo)
     target.attack_sources = []
     target._library = ContextLibrary()
-    target._library.add(tbc.tbc_context())
-    target._library.add(tbc.tbc_vendor_context())
+    # Both injectable sources (CI log, vendored notes) for this defective task.
+    target._library.add(tbc.tbc_task_context(task, tbc.STATE_VERDICT, tbc.SRC_CI))
+    target._library.add(tbc.tbc_task_context(task, tbc.STATE_VERDICT, tbc.SRC_VENDOR))
     campaign = build_campaign(target, ds, gen_ds=gen_ds, candidates_per_call=4)
     config = CampaignConfig(terminal_objective=OBJECTIVE, target_value="pass",
                             budgets=Budgets(per_path_retries=args.per_path, global_attempts=args.global_attempts))
@@ -144,7 +146,7 @@ def run_once(i, args):
             "append_text": _appended(*src) if src else None,
             "victim": hops[k] if k < len(hops) else None})
     res = {
-        "run": i, "success": report.success, "stop_reason": report.stop_reason,
+        "run": i, "task": task.id, "success": report.success, "stop_reason": report.stop_reason,
         "ranked_paths": report.ranked_paths,
         "induced_C1": any(a["stage_verdicts"]["C1_incorrect_commitment"] == "supported" for a in attempts),
         "hop1_flipped": any(a["victim"] and str(a["victim"]["attack"].get("verifier")).lower() == "verified"
@@ -167,7 +169,15 @@ def main():
     ap.add_argument("--global-attempts", type=int, default=24)
     ap.add_argument("--out", default=os.path.join(HERE, "tbc_llm_repeat_results.json"))
     ap.add_argument("--start", type=int, default=1, help="index of the first run (for resumed batches)")
+    ap.add_argument("--task", default=None,
+                    help="defective-task id to run (default: the first, duration_parser)")
+    ap.add_argument("--all-tasks", action="store_true",
+                    help="run every defective task once (ignores --repeats/--task)")
     args = ap.parse_args()
+
+    if args.task and args.task not in tbc.TASK_BY_ID:
+        ap.error(f"unknown --task {args.task}; choices: {', '.join(tbc.TASK_BY_ID)}")
+    task = tbc.TASK_BY_ID.get(args.task) if args.task else None
 
     runs, transcripts = [], {}
 
@@ -189,14 +199,20 @@ def main():
             json.dump(bundle, f, indent=2, ensure_ascii=False)
         return agg
 
-    for i in range(args.start, args.start + args.repeats):
+    if args.all_tasks:
+        plan = [(i + 1, t) for i, t in enumerate(tbc.THEBOTCOMPANY_TASKS)]
+    else:
+        plan = [(i, task) for i in range(args.start, args.start + args.repeats)]
+
+    for i, t in plan:
+        label = t.id if t else tbc.TASK0.id
         try:
-            res, tr = run_once(i, args)
+            res, tr = run_once(i, args, task=t)
             runs.append(res)
-            transcripts[f"run{i}"] = tr
+            transcripts[f"run{i}_{label}"] = tr
         except Exception:
-            print(f"[ERROR] run {i}:\n{traceback.format_exc()}", flush=True)
-            runs.append({"run": i, "error": traceback.format_exc()})
+            print(f"[ERROR] run {i} ({label}):\n{traceback.format_exc()}", flush=True)
+            runs.append({"run": i, "task": label, "error": traceback.format_exc()})
         flush()   # persist after EACH run so an interrupted batch keeps its detail
 
     agg = flush()
