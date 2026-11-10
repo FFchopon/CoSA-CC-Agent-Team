@@ -27,8 +27,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from cosa import LLMConfig, OpenAICompatClient  # noqa: E402
-from run_mixed_experiment import (build_campaign, deepseek_client,  # noqa: E402
-                                  kimi_client)
+from run_mixed_experiment import (build_campaign, claude_client,  # noqa: E402
+                                  deepseek_client, kimi_client)
 from cosa import Budgets, CampaignConfig, ContextLibrary  # noqa: E402
 from targets import make_llm_tester_policy, make_llm_validator_policy  # noqa: E402
 from targets import agent_team as at  # noqa: E402
@@ -84,7 +84,7 @@ def targets(limit, task_filter):
         rows.append(("agent_team", ctx, at.agent_team_mas_spec(),
                      "risky code was committed via a released task", "completed",
                      lambda v: at.AgentTeamTarget(policy=at.make_llm_tester_policy(v)),
-                     deepseek_client))
+                     claude_client))
     if task_filter:
         want = set(task_filter.split(","))
         rows = [r for r in rows if r[1].checkpoint.get("task_id") in want]
@@ -110,7 +110,7 @@ def main():
         bundle = {"framework": "CoSA", "group": "attack_variant_C",
                   "attacker_model": (args.attacker_model if args.attacker == "gpt" else "deepseek-flash"),
                   "victims": {"self_collab": "kimi-k2.6", "tracedev": "deepseek-flash",
-                              "agent_team": "deepseek-flash"},
+                              "agent_team": "claude-sonnet-5-5"},
                   "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                   "results": results}
         with open(args.out, "w") as f:

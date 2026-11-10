@@ -111,9 +111,11 @@ class RecordingTarget(tbc.TheBotCompanyTarget):
         return super().run(source_value, recorder)
 
 
-def _appended(source_field, value):
-    benign = tbc.BENIGN_CI_LOG if source_field == tbc.SRC_CI else tbc.BENIGN_VENDOR_NOTES
-    return value[len(benign.rstrip("\n")):].strip() if value.startswith(benign.rstrip("\n")) else value
+def _appended(source_field, value, task=None):
+    task = task or tbc.TASK0
+    benign = task.ci_log if source_field == tbc.SRC_CI else task.vendor_notes
+    benign = benign.rstrip("\n")
+    return value[len(benign):].strip() if value.startswith(benign) else value
 
 
 def run_once(i, args, task=None):
@@ -143,7 +145,7 @@ def run_once(i, args, task=None):
             "stage_verdicts": a.stage_verdicts, "chain_linked": a.chain_linked,
             "attribution": a.attribution, "complete_success": a.complete_success,
             "append_only_ok": a.append_only_ok, "decision": a.decision,
-            "append_text": _appended(*src) if src else None,
+            "append_text": _appended(src[0], src[1], task) if src else None,
             "victim": hops[k] if k < len(hops) else None})
     res = {
         "run": i, "task": task.id, "success": report.success, "stop_reason": report.stop_reason,

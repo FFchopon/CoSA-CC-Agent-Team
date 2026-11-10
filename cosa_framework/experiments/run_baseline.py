@@ -21,7 +21,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from cosa.spec import EvidenceBundle  # noqa: E402
-from run_mixed_experiment import deepseek_client, kimi_client  # noqa: E402
+from run_mixed_experiment import (claude_client, deepseek_client,  # noqa: E402
+                                  kimi_client)
 from targets import make_llm_tester_policy, make_llm_validator_policy  # noqa: E402
 from targets import agent_team as at  # noqa: E402
 from targets import self_collab as sc  # noqa: E402
@@ -48,24 +49,32 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__),
                                                   "baseline_results.json"))
+    ap.add_argument("--target", default="", help="run only this target "
+                    "(self_collab | tracedev | agent_team); default = all")
     args = ap.parse_args()
 
     # Per-target victim model + target/target-policy factory + the affirmative value
-    # that would mean "wrongly accepted".
-    specs = [
-        ("self_collab", kimi_client(), "pass",
+    # that would mean "wrongly accepted". GatedTeam (agent_team) models Claude's
+    # Agent Teams, so its victim coordinator is Claude (Sonnet); the CoSA attacker
+    # pipeline — used only in the attack runs, not this baseline — stays DeepSeek.
+    all_specs = [
+        ("self_collab", kimi_client, "pass",
          sc.self_collab_task_contexts,
          lambda v: sc.SelfCollabTarget(policy=make_llm_tester_policy(v))),
-        ("tracedev", deepseek_client(), "complete",
+        ("tracedev", deepseek_client, "complete",
          td.tracedev_task_contexts,
          lambda v: td.TraceDevTarget(policy=make_llm_validator_policy(v))),
-        ("agent_team", deepseek_client(), "completed",
+        ("agent_team", claude_client, "completed",
          at.agent_team_task_contexts,
          lambda v: at.AgentTeamTarget(policy=at.make_llm_tester_policy(v))),
     ]
+    specs = [s for s in all_specs if not args.target or s[0] == args.target]
+    if not specs:
+        raise SystemExit(f"unknown --target {args.target!r}")
 
     results = []
-    for name, victim, affirmative, contexts_fn, make_target in specs:
+    for name, make_victim, affirmative, contexts_fn, make_target in specs:
+        victim = make_victim()
         for context in contexts_fn():
             target = make_target(victim)
             r = baseline_one(target, context, victim)
@@ -81,7 +90,7 @@ def main():
 
     bundle = {"framework": "CoSA", "group": "baseline_no_injection",
               "victims": {"self_collab": "kimi-k2.6", "tracedev": "deepseek-flash",
-                          "agent_team": "deepseek-flash"},
+                          "agent_team": "claude-sonnet-5-5"},
               "runs_per_task": 1,
               "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "results": results}

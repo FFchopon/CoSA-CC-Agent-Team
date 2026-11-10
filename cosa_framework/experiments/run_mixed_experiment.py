@@ -45,6 +45,17 @@ def kimi_client():
         api_key_file=os.path.join(KEYDIR, "kimi-key.txt"), temperature=1.0, timeout=90))
 
 
+def claude_client(model: str = "claude-sonnet-5-5", temperature=None):
+    # Anthropic's OpenAI-compatible endpoint. Two compat-layer quirks:
+    #   * it rejects response_format={"type":"json_object"} -> ask for JSON by
+    #     prompt only (json_response_format=False); complete_json parses the text;
+    #   * `temperature` is deprecated for this model -> omit it (temperature=None).
+    return OpenAICompatClient(LLMConfig(
+        model=model, base_url="https://api.anthropic.com/v1",
+        api_key_file=os.path.join(KEYDIR, "claude-key.txt"),
+        temperature=temperature, timeout=120, json_response_format=False))
+
+
 def build_campaign(target, ds, gen_ds=None, candidates_per_call=4):
     """Attacker pipeline on DeepSeek; Analyzer is deterministic (human MDG).
 

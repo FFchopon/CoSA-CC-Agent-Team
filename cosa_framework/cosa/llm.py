@@ -32,7 +32,9 @@ class LLMConfig:
     api_key: Optional[str] = None            # explicit key (takes precedence)
     api_key_env: str = "DEEPSEEK_API_KEY"    # else read this environment variable
     api_key_file: Optional[str] = None       # else read this file
-    temperature: float = 0.2
+    # Sampling temperature. Set to None to omit the field entirely — some newer
+    # models (e.g. Claude Sonnet via the compat layer) reject `temperature`.
+    temperature: Optional[float] = 0.2
     timeout: int = 60
     max_retries: int = 6          # retry on HTTP 429 (rate limit) with backoff
     retry_base: float = 20.0      # base backoff seconds (e.g. RPM=3 -> ~20s/request)
@@ -93,10 +95,11 @@ class OpenAICompatClient(LLMClient):
         key = self.config.resolve_key()
         payload: Dict[str, Any] = {
             "model": self.config.model,
-            "temperature": self.config.temperature,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
         }
+        if self.config.temperature is not None:
+            payload["temperature"] = self.config.temperature
         if json_mode and self.config.json_response_format:
             payload["response_format"] = {"type": "json_object"}
         body = json.dumps(payload).encode()
