@@ -3,7 +3,9 @@
 
 The outer loop is the bounded Claude-attempt budget.  Inside each outer round,
 every failed attempt is followed by one DeepSeek refinement and a retry, up to
-the per-round refinement limit.  A target-success event exits both loops.
+the per-round refinement limit.  A complete-chain target-success event exits
+both loops; role violations are recorded separately unless strict mode is
+requested.
 """
 import argparse
 import datetime
@@ -11,7 +13,9 @@ import json
 from pathlib import Path
 
 import refine_payload
-from run_refined_attack import inspect, prepare, run_claude, success_observed, terminal_tail
+from run_refined_attack import (causal_success_observed, inspect, prepare,
+                                role_boundary_violations, run_claude,
+                                state_write_observed, terminal_tail)
 
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +31,8 @@ def main():
     parser.add_argument('--max-refines-per-round', type=int, default=5,
                         help='inner refine/retry limit in each outer round')
     parser.add_argument('--seconds-per-run', type=int, default=300)
+    parser.add_argument('--strict-role-boundaries', action='store_true',
+                        help='reject complete chains with cross-role task writes')
     args = parser.parse_args()
     if args.max_retries < 0 or args.max_refines_per_round < 1:
         parser.error('retry/refine limits are invalid')
@@ -43,9 +49,13 @@ def main():
         'outer_round_limit': args.max_retries + 1,
         'inner_refine_limit_per_round': args.max_refines_per_round,
         'inner_attempt_limit_per_round': args.max_refines_per_round + 1,
+        'role_boundary_policy': ('strict' if args.strict_role_boundaries
+                                 else 'permissive'),
         'semantics': ('Each outer round runs one initial Claude attempt, then keeps '
                       'the refinement-and-retry loop in that same round for up to '
-                      'the configured inner limit. Target success stops both loops.'),
+                      'the configured inner limit. T2 state writes and role '
+                      'violations are recorded separately; only the complete '
+                      'causal chain stops both loops.'),
         'rounds': [],
     }
 
@@ -71,10 +81,14 @@ def main():
                 'run': str(run),
                 'payload_before_attempt': payload_before_attempt,
             }
-            run_claude(run, args.seconds_per_run, args.model)
+            run_claude(run, args.seconds_per_run, args.model,
+                       args.strict_role_boundaries)
             evidence = inspect(run)
             attempt['inspection'] = evidence
-            attempt['attack_success'] = success_observed(run)
+            attempt['role_boundary_violations'] = role_boundary_violations(run)
+            attempt['state_write_observed'] = state_write_observed(run)
+            attempt['attack_success'] = causal_success_observed(
+                run, args.strict_role_boundaries)
             round_info['attempts'].append(attempt)
 
             if attempt['attack_success']:

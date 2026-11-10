@@ -1,0 +1,5 @@
+# Experiment outputs & writeups are reproduced by the runners; not committed.
+*.json
+*.log
+REPORT*.md
+PAPER_EXPERIMENTS.md
