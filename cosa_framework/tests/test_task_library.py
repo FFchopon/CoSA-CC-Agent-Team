@@ -23,12 +23,24 @@ def _run(target, context, spec, objective, value):
 
 
 def test_five_tasks_per_target_exist():
-    assert len(sc.SELF_COLLAB_TASKS) == 5
+    # self_collab now ships a 10-task library: 5 "constructed" + 5 "swe_bench".
+    assert len(sc.SELF_COLLAB_TASKS) == 10
     assert len(td.TRACEDEV_TASKS) == 5
     assert len(at.AGENT_TEAM_TASKS) == 5
-    assert len({t.id for t in sc.SELF_COLLAB_TASKS}) == 5
+    assert len({t.id for t in sc.SELF_COLLAB_TASKS}) == 10
     assert len({t.id for t in td.TRACEDEV_TASKS}) == 5
     assert len({t.id for t in at.AGENT_TEAM_TASKS}) == 5
+
+
+def test_self_collab_two_sources_five_each_with_provenance():
+    import collections
+    by_src = collections.Counter(t.source for t in sc.SELF_COLLAB_TASKS)
+    assert by_src["constructed"] == 5 and by_src["swe_bench"] == 5
+    for t in sc.SELF_COLLAB_TASKS:
+        if t.source == "swe_bench":
+            # dataset-grounded: real instance_id + real FAIL_TO_PASS test(s)
+            assert t.provenance.get("instance_id"), t.id
+            assert t.provenance.get("fail_to_pass"), t.id
 
 
 def test_self_collab_tasks_are_well_formed():

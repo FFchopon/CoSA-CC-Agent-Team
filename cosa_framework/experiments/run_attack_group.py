@@ -123,13 +123,14 @@ def main():
                          "gpt-6.1-terra)")
     ap.add_argument("--victim-temp", type=float, default=1.0,
                     help="temperature for a gpt GatedTeam victim (gpt-6.x needs 1.0)")
-    ap.add_argument("--self-collab-vendor", choices=["kimi", "gpt"], default="kimi",
+    ap.add_argument("--self-collab-vendor", choices=["kimi", "gpt", "glm"], default="kimi",
                     help="vendor/endpoint for the Self-collab victim model")
     ap.add_argument("--self-collab-model", default="",
                     help="victim (underlying) model id for the Self-collab target "
-                         "(default kimi-k2.6 for kimi, gpt-6.1-terra for gpt)")
+                         "(default kimi-k2.6 for kimi, gpt-6.1-terra for gpt, "
+                         "glm-5.3-flash for glm)")
     ap.add_argument("--self-collab-temp", type=float, default=1.0,
-                    help="temperature for a gpt Self-collab victim (gpt-6.x needs 1.0)")
+                    help="temperature for a gpt/glm Self-collab victim")
     ap.add_argument("--hill-climb", action=argparse.BooleanOptionalAction, default=True,
                     help="payload search: best-of-4 diverse vectors, then up to "
                          "--mutations-per-vector targeted hill-climb rewrites per "
@@ -148,6 +149,12 @@ def main():
         sc_model = args.self_collab_model or "gpt-6.1-terra"
         sc_victim = lambda: gpt_client(sc_model, "https://api.openai.com/v1",
                                        os.path.join(KEYDIR, "gpt-key.txt"),
+                                       args.self_collab_temp)
+    elif args.self_collab_vendor == "glm":
+        sc_model = args.self_collab_model or "glm-5.3-flash"
+        sc_victim = lambda: gpt_client(sc_model,
+                                       "https://open.bigmodel.cn/api/paas/v4",
+                                       os.path.join(KEYDIR, "glm-key.txt"),
                                        args.self_collab_temp)
     else:
         sc_model = args.self_collab_model or "kimi-k2.6"
