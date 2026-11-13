@@ -1,6 +1,6 @@
 """Validate that every defective task in both target libraries is well-formed.
 
-For each of the 5 tasks per target, with deterministic policies and P1 append-only:
+For each defective task per target, with deterministic policies and P1 append-only:
   * vulnerable  -> a complete, attributed C1->C2->C3 chain is reachable;
   * defended    -> fails closed (C1 never supported);
   * control     -> the benign (un-injected) run produces no terminal outcome.
@@ -23,24 +23,45 @@ def _run(target, context, spec, objective, value):
 
 
 def test_five_tasks_per_target_exist():
-    # self_collab now ships a 10-task library: 5 "constructed" + 5 "swe_bench".
+    # self_collab and agent_team each ship a 10-task library:
+    # 5 "constructed" + 5 "swe_bench". tracedev still ships 5.
     assert len(sc.SELF_COLLAB_TASKS) == 10
     assert len(td.TRACEDEV_TASKS) == 5
-    assert len(at.AGENT_TEAM_TASKS) == 5
+    assert len(at.AGENT_TEAM_TASKS) == 10
     assert len({t.id for t in sc.SELF_COLLAB_TASKS}) == 10
     assert len({t.id for t in td.TRACEDEV_TASKS}) == 5
-    assert len({t.id for t in at.AGENT_TEAM_TASKS}) == 5
+    assert len({t.id for t in at.AGENT_TEAM_TASKS}) == 10
 
 
-def test_self_collab_two_sources_five_each_with_provenance():
+def _assert_two_swe_sources_five_each(tasks):
+    """Both sources are SWE-bench-grounded: 5 'swe_derived' (plausible agent
+    defect reasoned from a real normal task) + 5 'swe_bench' (the real pre-fix
+    defect). Every task cites a real instance_id + real FAIL_TO_PASS test(s)."""
     import collections
-    by_src = collections.Counter(t.source for t in sc.SELF_COLLAB_TASKS)
-    assert by_src["constructed"] == 5 and by_src["swe_bench"] == 5
-    for t in sc.SELF_COLLAB_TASKS:
-        if t.source == "swe_bench":
-            # dataset-grounded: real instance_id + real FAIL_TO_PASS test(s)
-            assert t.provenance.get("instance_id"), t.id
-            assert t.provenance.get("fail_to_pass"), t.id
+    by_src = collections.Counter(t.source for t in tasks)
+    assert by_src["swe_derived"] == 5 and by_src["swe_bench"] == 5, by_src
+    for t in tasks:
+        assert t.provenance.get("instance_id"), t.id
+        assert t.provenance.get("fail_to_pass"), t.id
+    # within a library, the derived set and the pre-fix set use distinct instances
+    derived = {t.provenance["instance_id"] for t in tasks if t.source == "swe_derived"}
+    prefix = {t.provenance["instance_id"] for t in tasks if t.source == "swe_bench"}
+    assert derived.isdisjoint(prefix)
+
+
+def test_self_collab_two_swe_sources_five_each_with_provenance():
+    _assert_two_swe_sources_five_each(sc.SELF_COLLAB_TASKS)
+
+
+def test_agent_team_two_swe_sources_five_each_with_provenance():
+    _assert_two_swe_sources_five_each(at.AGENT_TEAM_TASKS)
+
+
+def test_swe_instances_unique_across_libraries():
+    # No SWE-bench instance is reused anywhere across both 10-task libraries.
+    ids = [t.provenance["instance_id"]
+           for t in list(sc.SELF_COLLAB_TASKS) + list(at.AGENT_TEAM_TASKS)]
+    assert len(ids) == len(set(ids)) == 20
 
 
 def test_self_collab_tasks_are_well_formed():
