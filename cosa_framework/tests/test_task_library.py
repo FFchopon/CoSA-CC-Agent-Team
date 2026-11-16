@@ -9,7 +9,9 @@ This is the offline sanity gate before the real-LLM batch (variant C).
 """
 from cosa import Budgets, CampaignConfig, ContextLibrary, CoSACampaign
 from targets import agent_team as at
+from targets import metagpt as mg
 from targets import self_collab as sc
+from targets import thebotcompany as tbc
 from targets import tracedev as td
 
 
@@ -23,14 +25,18 @@ def _run(target, context, spec, objective, value):
 
 
 def test_task_library_sizes():
-    # self_collab and agent_team each ship a 20-task library:
-    # 10 "swe_derived" + 10 "swe_bench". tracedev still ships 5.
+    # self_collab, agent_team, thebotcompany and metagpt each ship a 20-task
+    # library: 10 "swe_derived" + 10 "swe_bench". tracedev still ships 5.
     assert len(sc.SELF_COLLAB_TASKS) == 20
     assert len(td.TRACEDEV_TASKS) == 5
     assert len(at.AGENT_TEAM_TASKS) == 20
+    assert len(tbc.THEBOTCOMPANY_TASKS) == 20
+    assert len(mg.METAGPT_TASKS) == 20
     assert len({t.id for t in sc.SELF_COLLAB_TASKS}) == 20
     assert len({t.id for t in td.TRACEDEV_TASKS}) == 5
     assert len({t.id for t in at.AGENT_TEAM_TASKS}) == 20
+    assert len({t.id for t in tbc.THEBOTCOMPANY_TASKS}) == 20
+    assert len({t.id for t in mg.METAGPT_TASKS}) == 20
 
 
 def _assert_two_swe_sources_ten_each(tasks):
@@ -57,11 +63,20 @@ def test_agent_team_two_swe_sources_ten_each_with_provenance():
     _assert_two_swe_sources_ten_each(at.AGENT_TEAM_TASKS)
 
 
+def test_thebotcompany_two_swe_sources_ten_each_with_provenance():
+    _assert_two_swe_sources_ten_each(tbc.THEBOTCOMPANY_TASKS)
+
+
+def test_metagpt_two_swe_sources_ten_each_with_provenance():
+    _assert_two_swe_sources_ten_each(mg.METAGPT_TASKS)
+
+
 def test_swe_instances_unique_across_libraries():
-    # No SWE-bench instance is reused anywhere across both 20-task libraries.
+    # No SWE-bench instance is reused anywhere across the four 20-task libraries.
     ids = [t.provenance["instance_id"]
-           for t in list(sc.SELF_COLLAB_TASKS) + list(at.AGENT_TEAM_TASKS)]
-    assert len(ids) == len(set(ids)) == 40
+           for t in (list(sc.SELF_COLLAB_TASKS) + list(at.AGENT_TEAM_TASKS)
+                     + list(tbc.THEBOTCOMPANY_TASKS) + list(mg.METAGPT_TASKS))]
+    assert len(ids) == len(set(ids)) == 80
 
 
 def test_self_collab_tasks_are_well_formed():
@@ -102,6 +117,21 @@ def test_agent_team_tasks_are_well_formed():
         assert vuln.attempts[-1].attribution
         def_ = _run(at.AgentTeamTarget(policy=at.DefendedTesterPolicy()),
                     context, spec, objective, "completed")
+        assert not def_.success, f"{context.id}: defended was not fail-closed"
+        assert all(a.stage_verdicts["C1_incorrect_commitment"] != "supported"
+                   for a in def_.attempts)
+
+
+def test_metagpt_tasks_are_well_formed():
+    spec = mg.metagpt_mas_spec()
+    objective = "defective code written as the accepted deliverable"
+    for context in mg.metagpt_task_contexts():
+        vuln = _run(mg.MetaGPTTarget(policy=mg.VulnerableReviewerPolicy()),
+                    context, spec, objective, "YES")
+        assert vuln.success, f"{context.id}: vulnerable did not complete the chain"
+        assert vuln.attempts[-1].attribution
+        def_ = _run(mg.MetaGPTTarget(policy=mg.DefendedReviewerPolicy()),
+                    context, spec, objective, "YES")
         assert not def_.success, f"{context.id}: defended was not fail-closed"
         assert all(a.stage_verdicts["C1_incorrect_commitment"] != "supported"
                    for a in def_.attempts)

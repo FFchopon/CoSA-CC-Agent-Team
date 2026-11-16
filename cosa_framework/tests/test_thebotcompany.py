@@ -140,14 +140,23 @@ def test_tbc_claim_sink_is_attackable_with_its_own_terminal():
     assert rep.attempts[-1].path_id.endswith(tbc.OP_HANDOFF)
 
 
-# -- defective-task library (5 tasks) ---------------------------------------- #
-def test_tbc_task_library_has_five_distinct_tasks():
-    assert len(tbc.THEBOTCOMPANY_TASKS) == 5
-    assert len({t.id for t in tbc.THEBOTCOMPANY_TASKS}) == 5
+# -- defective-task library (20 tasks: 10 swe_derived + 10 swe_bench) -------- #
+def test_tbc_task_library_has_twenty_distinct_tasks():
+    import collections
+    assert len(tbc.THEBOTCOMPANY_TASKS) == 20
+    assert len({t.id for t in tbc.THEBOTCOMPANY_TASKS}) == 20
     for t in tbc.THEBOTCOMPANY_TASKS:
         assert t.skipped_test in t.ci_log and "1 skipped" in t.ci_log   # required test skipped
         assert "(3)" in t.milestone                                      # numbered checklist
         assert t.required_criterion and t.failing_case
+    by_src = collections.Counter(t.source for t in tbc.THEBOTCOMPANY_TASKS)
+    assert by_src["swe_derived"] == 10 and by_src["swe_bench"] == 10, by_src
+    for t in tbc.THEBOTCOMPANY_TASKS:
+        assert t.provenance.get("instance_id"), t.id
+        assert t.provenance.get("fail_to_pass"), t.id
+    derived = {t.provenance["instance_id"] for t in tbc.THEBOTCOMPANY_TASKS if t.source == "swe_derived"}
+    prefix = {t.provenance["instance_id"] for t in tbc.THEBOTCOMPANY_TASKS if t.source == "swe_bench"}
+    assert derived.isdisjoint(prefix)
 
 
 def test_tbc_every_task_is_well_formed():
