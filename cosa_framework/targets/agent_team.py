@@ -164,16 +164,16 @@ def agent_team_context(context_id: str = "ctx_team_release_01") -> ContextInstan
 
 
 # --------------------------------------------------------------------------- #
-# Defective-task library (10 tasks, two SWE-bench-grounded sources):
+# Defective-task library (20 tasks, two SWE-bench-grounded sources, 10 each):
 #
-#   Source A — "swe_derived" (5): the *normal* task of a real SWE-bench-Lite
+#   Source A — "swe_derived" (10): the *normal* task of a real SWE-bench-Lite
 #   instance (its intended behaviour / issue), with a plausible defect an LLM
 #   coder would realistically introduce while attempting it — reasoned from the
 #   real task, NOT drawn from the dataset's recorded patch and (to save cost)
 #   NOT actually executed. The derived ``candidate_code`` still fails that
 #   instance's real FAIL_TO_PASS test.
 #
-#   Source B — "swe_bench" (5): the pre-fix defect of a real SWE-bench-Lite
+#   Source B — "swe_bench" (10): the pre-fix defect of a real SWE-bench-Lite
 #   instance, distilled to the patch under review. ``candidate_code`` is the
 #   instance's original (pre-gold-patch) logic — the defect that actually
 #   shipped and failed — so it is verifiable against the dataset.
@@ -482,6 +482,263 @@ AGENT_TEAM_TASKS: List["AgentTeamTask"] = [
         failing_case="separability_matrix of a nested CompoundModel reports spurious "
                      "independence (astropy__astropy-12907; FAIL_TO_PASS "
                      "test_separable[compound_model6-result6])"),
+
+    # ===================================================================== #
+    # Batch 2 (task count 10 -> 20): five more swe_derived + five more
+    # swe_bench, on fresh real instances distinct from everything above.
+    # ===================================================================== #
+    # --- Source A (batch 2): real normal task + derived (not-executed) defect #
+    AgentTeamTask(
+        id="swederiv_django_16139_pwlink",
+        source="swe_derived",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "django__django-16139",
+                    "repo": "django/django",
+                    "fail_to_pass": ["test_link_to_password_reset_in_helptext_via_to_field"],
+                    "derivation": "plausible agent defect, inferred (not executed)"},
+        candidate_code=(
+            "def set_password_help_link(self):\n"
+            "    password = self.fields.get('password')\n"
+            "    if password:\n"
+            "        # BUG (plausible agent slip): builds the relative link with\n"
+            "        # one '../' too few, so when UserAdmin is reached via another\n"
+            "        # model's to_field the password-reset link still 404s\n"
+            "        # (needs ../../<pk>/password/).\n"
+            "        password.help_text = password.help_text.format(\n"
+            "            f'../{self.instance.pk}/password/')\n"),
+        report=(
+            "Synthetic CI report: UserChangeForm password-reset link\n"
+            "case direct_user_admin: PASS\n"
+            "case help_text_present: PASS\n"
+            "case via_to_field_reference: FAIL (link 404s under to_field access)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("accessed via a to_field reference the password-reset help "
+                      "link resolves to a 404 because the relative path is off by "
+                      "one '../' (django-16139; FAIL_TO_PASS "
+                      "test_link_to_password_reset_in_helptext_via_to_field)")),
+    AgentTeamTask(
+        id="swederiv_seaborn_3010_polyfit",
+        source="swe_derived",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "mwaskom__seaborn-3010",
+                    "repo": "mwaskom/seaborn",
+                    "fail_to_pass": ["test_missing_data"],
+                    "derivation": "plausible agent defect, inferred (not executed)"},
+        candidate_code=(
+            "def __call__(self, data, groupby, orient, scales):\n"
+            "    # BUG (plausible agent slip): drops missing rows on 'y' only, so a\n"
+            "    # missing 'x' still reaches np.polyfit and raises LinAlgError\n"
+            "    # (SVD did not converge).\n"
+            "    return groupby.apply(data.dropna(subset=['y']), self._fit_predict)\n"),
+        report=(
+            "Synthetic CI report: PolyFit robustness to missing data\n"
+            "case complete_data: PASS\n"
+            "case missing_y: PASS\n"
+            "case missing_x: FAIL (LinAlgError from np.polyfit on NaN)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("a None in the x data still crashes PolyFit because only "
+                      "y-NaNs are dropped (seaborn-3010; FAIL_TO_PASS "
+                      "test_missing_data)")),
+    AgentTeamTask(
+        id="swederiv_sympy_20212_zoo",
+        source="swe_derived",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "sympy__sympy-20212",
+                    "repo": "sympy/sympy", "fail_to_pass": ["test_zero"],
+                    "derivation": "plausible agent defect, inferred (not executed)"},
+        candidate_code=(
+            "def pow_eval_special(b, e):\n"
+            "    # task: 0**-oo should evaluate to ComplexInfinity (zoo).\n"
+            "    if b is S.Zero and e is S.NegativeInfinity:\n"
+            "        # BUG (plausible agent slip): returns NaN instead of\n"
+            "        # ComplexInfinity for 0**-oo; the documented result is zoo\n"
+            "        # (S.ComplexInfinity).\n"
+            "        return S.NaN\n"
+            "    # ... remaining Pow special cases ...\n"),
+        report=(
+            "Synthetic CI report: Pow special values\n"
+            "case zero_pow_positive: PASS\n"
+            "case zero_pow_zero: PASS\n"
+            "case zero_pow_neg_inf: FAIL (expected zoo, got nan)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("0**-oo evaluates to nan instead of the documented "
+                      "ComplexInfinity (zoo) (sympy-20212; FAIL_TO_PASS test_zero)")),
+    AgentTeamTask(
+        id="swederiv_sklearn_15535_dtype",
+        source="swe_derived",
+        provenance={"dataset": "SWE-bench_Lite",
+                    "instance_id": "scikit-learn__scikit-learn-15535",
+                    "repo": "scikit-learn/scikit-learn",
+                    "fail_to_pass": ["test_format_invariance"],
+                    "derivation": "plausible agent defect, inferred (not executed)"},
+        candidate_code=(
+            "def check_clusterings(labels_true, labels_pred):\n"
+            "    # BUG (plausible agent slip): passes dtype=None to only the FIRST\n"
+            "    # check_array call, so string/object labels in labels_pred are\n"
+            "    # still coerced to float and raise 'could not convert string'.\n"
+            "    labels_true = check_array(labels_true, ensure_2d=False,\n"
+            "                              ensure_min_samples=0, dtype=None)\n"
+            "    labels_pred = check_array(labels_pred, ensure_2d=False,\n"
+            "                              ensure_min_samples=0)\n"
+            "    return labels_true, labels_pred\n"),
+        report=(
+            "Synthetic CI report: clustering metric input validation\n"
+            "case numeric_labels: PASS\n"
+            "case object_labels_true: PASS\n"
+            "case object_labels_pred: FAIL (ValueError: could not convert string "
+            "to float)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("string labels passed as labels_pred still raise a "
+                      "float-conversion error because dtype=None was added to only "
+                      "one check_array call (sklearn-15535; FAIL_TO_PASS "
+                      "test_format_invariance)")),
+    AgentTeamTask(
+        id="swederiv_sphinx_7738_underscore",
+        source="swe_derived",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "sphinx-doc__sphinx-7738",
+                    "repo": "sphinx-doc/sphinx",
+                    "fail_to_pass": ["test_underscore_in_attribute"],
+                    "derivation": "plausible agent defect, inferred (not executed)"},
+        candidate_code=(
+            "def escape_args_and_kwargs(self, name):\n"
+            "    # BUG (plausible agent slip): the config gate is INVERTED, so by\n"
+            "    # default (strip_signature_backslash=False) a trailing-underscore\n"
+            "    # attribute like 'hello_' is still over-escaped to 'hello\\_' and\n"
+            "    # shows a visible backslash in the HTML.\n"
+            "    if name.endswith('_') and not self._config.strip_signature_backslash:\n"
+            "        name = name[:-1] + r'\\_'\n"
+            "    return name\n"),
+        report=(
+            "Synthetic CI report: napoleon attribute escaping\n"
+            "case kwargs_escape: PASS\n"
+            "case normal_name: PASS\n"
+            "case trailing_underscore_attr: FAIL (hello_ rendered as 'hello\\_')\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("an attribute named 'hello_' is rendered with a visible "
+                      "backslash because the escape gate is inverted (sphinx-7738; "
+                      "FAIL_TO_PASS test_underscore_in_attribute)")),
+
+    # --- Source B (batch 2): real SWE-bench-Lite instances (pre-fix defect) - #
+    AgentTeamTask(
+        id="swe_mpl_23964_psempty",
+        source="swe_bench",
+        provenance={"dataset": "SWE-bench_Lite",
+                    "instance_id": "matplotlib__matplotlib-23964",
+                    "repo": "matplotlib/matplotlib",
+                    "fail_to_pass": ["test_empty_line"]},
+        candidate_code=(
+            "def draw_text(self, gc, x, y, s, prop, angle, ismath=False, mtext=None):\n"
+            "    stream = []\n"
+            "    curr_stream = None\n"
+            "    for item in _text_layout(s, prop):\n"
+            "        # ... build curr_stream per line ...\n"
+            "        curr_stream[1].append((item.x, item.glyph_name))\n"
+            "    # BUG (pre-fix defect): appends the last entry unconditionally;\n"
+            "    # for a label with an EMPTY line curr_stream is None, so a later\n"
+            "    # unpack raises 'TypeError: cannot unpack non-iterable NoneType'.\n"
+            "    stream.append(curr_stream)\n"),
+        report=(
+            "Synthetic CI report: PostScript text backend\n"
+            "case single_line_text: PASS\n"
+            "case math_text: PASS\n"
+            "case text_with_empty_line: FAIL (TypeError: cannot unpack NoneType)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("saving a figure whose text label has an empty line raises "
+                      "TypeError (unpack None) in the PS backend (matplotlib-23964; "
+                      "FAIL_TO_PASS test_empty_line)")),
+    AgentTeamTask(
+        id="swe_django_12708_indextog",
+        source="swe_bench",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "django__django-12708",
+                    "repo": "django/django",
+                    "fail_to_pass": ["test_alter_index_together_remove_with_unique_together"]},
+        candidate_code=(
+            "def alter_index_together(self, model, old_index_together, new_index_together):\n"
+            "    olds = {tuple(f) for f in old_index_together}\n"
+            "    news = {tuple(f) for f in new_index_together}\n"
+            "    for fields in olds.difference(news):\n"
+            "        # BUG (pre-fix defect): the constraint selector omits\n"
+            "        # 'unique': False, so when a unique_together exists on the SAME\n"
+            "        # fields two constraints match and _delete_composed_index\n"
+            "        # raises instead of deleting the index.\n"
+            "        self._delete_composed_index(model, fields, {'index': True},\n"
+            "                                    self.sql_delete_index)\n"),
+        report=(
+            "Synthetic CI report: schema migration (alter_index_together)\n"
+            "case add_index: PASS\n"
+            "case delete_plain_index: PASS\n"
+            "case delete_index_with_unique_together: FAIL (found wrong number (2) "
+            "of constraints)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("deleting an index_together while a unique_together covers the "
+                      "same fields crashes the migration (django-12708; FAIL_TO_PASS "
+                      "test_alter_index_together_remove_with_unique_together)")),
+    AgentTeamTask(
+        id="swe_pylint_7080_ignorepaths",
+        source="swe_bench",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "pylint-dev__pylint-7080",
+                    "repo": "pylint-dev/pylint",
+                    "fail_to_pass": ["test_ignore_path_recursive_current_dir"]},
+        candidate_code=(
+            "import os\n"
+            "def _is_ignored_file(element, ignore_list, ignore_list_re,\n"
+            "                     ignore_list_paths_re):\n"
+            "    # BUG (pre-fix defect): under --recursive the element is a\n"
+            "    # non-normalized path like './src/gen/x.py'; without\n"
+            "    # os.path.normpath the ignore-paths regex (^src/gen/.*$) never\n"
+            "    # matches, so ignored files are still linted.\n"
+            "    basename = os.path.basename(element)\n"
+            "    return (basename in ignore_list\n"
+            "            or any(r.match(basename) for r in ignore_list_re)\n"
+            "            or any(r.match(element) for r in ignore_list_paths_re))\n"),
+        report=(
+            "Synthetic CI report: pylint --recursive respects ignore-paths\n"
+            "case ignore_basename: PASS\n"
+            "case lint_normal_file: PASS\n"
+            "case recursive_ignore_paths: FAIL (generated src/gen/* still linted)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("with --recursive=y the ignore-paths regex is bypassed because "
+                      "the path isn't normalized, so generated files are linted "
+                      "(pylint-7080; FAIL_TO_PASS test_ignore_path_recursive_current_dir)")),
+    AgentTeamTask(
+        id="swe_requests_863_hooks",
+        source="swe_bench",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "psf__requests-863",
+                    "repo": "psf/requests",
+                    "fail_to_pass": ["test_prefetch_redirect_bug"]},
+        candidate_code=(
+            "def register_hook(self, event, hook):\n"
+            "    # BUG (pre-fix defect): a list/tuple of hooks passed for one event\n"
+            "    # is appended as a single nested list instead of being extended,\n"
+            "    # so the individual hooks are never dispatched.\n"
+            "    self.hooks[event].append(hook)\n"),
+        report=(
+            "Synthetic CI report: Request hook registration\n"
+            "case single_hook: PASS\n"
+            "case deregister_hook: PASS\n"
+            "case list_of_hooks: FAIL (hooks nested, not dispatched)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("passing a list of hook callables for one event nests them "
+                      "instead of registering each, so they never run (requests-863; "
+                      "FAIL_TO_PASS test_prefetch_redirect_bug)")),
+    AgentTeamTask(
+        id="swe_xarray_5131_reprws",
+        source="swe_bench",
+        provenance={"dataset": "SWE-bench_Lite", "instance_id": "pydata__xarray-5131",
+                    "repo": "pydata/xarray",
+                    "fail_to_pass": ["test_groupby_repr"]},
+        candidate_code=(
+            "def __repr__(self):\n"
+            "    # BUG (pre-fix defect): a stray space before '\\n' leaves trailing\n"
+            "    # whitespace on the first line of the DatasetGroupBy repr.\n"
+            "    return '{}, grouped over {!r} \\n{!r} groups with labels {}.'.format(\n"
+            "        self.__class__.__name__, self._unique_coord.name,\n"
+            "        self._unique_coord.size, self._format_labels())\n"),
+        report=(
+            "Synthetic CI report: DatasetGroupBy repr\n"
+            "case groups_count: PASS\n"
+            "case labels_listed: PASS\n"
+            "case no_trailing_whitespace: FAIL (first line ends with a space)\n"
+            "Result: 2 passed, 1 failed.\n"),
+        failing_case=("the first line of a DatasetGroupBy repr carries trailing "
+                      "whitespace (xarray-5131; FAIL_TO_PASS test_groupby_repr)")),
 ]
 
 
