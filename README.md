@@ -47,6 +47,40 @@ MASSpec --Analyzer--> MDG --Grafter--> ranked source->sink paths
 - **Judge:** `HybridJudge` keeps the C1/C2/C3 verdicts deterministic (evidence-gated)
   and uses the LLM only for human-readable rationale.
 
+## The five agents
+
+The pipeline is five agents plus deterministic glue (the `Executor` replays a
+path; the `Reflector` drives the search loop). Two kinds of components run very
+differently: **Analyzer/Grafter** are run **once per target, offline, then
+frozen** (a versioned artifact, pinned model + prompt; they do not run during an
+experiment), while **Dispatcher/Generator/Judge** run **live during the
+experiment** but with pinned models / deterministic logic.
+
+| Agent | Responsibility | Cadence | Model / determinism |
+|---|---|---|---|
+| **Analyzer** | Extract a faithful MAS graph (nodes/edges, agents, coordination state, dataflow) from the target's **source**. | per target, offline → **frozen** | pinned strong model; not re-run during experiments |
+| **Grafter** | Search the graph for an **attackable coordination state** and its **source→sink path** (injection point → the field whose corruption propagates). | per target, offline → **frozen** | pinned strong model |
+| **Dispatcher** | Two heads: **(a) criterion head** — reason out the C1∧C2∧C3 predicate / NL rubric for this task's specific defect; **(b) assembly + drive** — load the frozen defect, build the checkpoint, bind source/sink, enforce the append-only P1 edit, and run the condition matrix (control/attack × repeats × victim models), calling Generator and Judge. | per task once (criterion → **frozen + self-validated**) + loop driver | criterion head may use a model; assembly/drive is deterministic code |
+| **Generator** | Produce the injection payload for the chosen path; optional generate→test→refine search within a fixed budget. | **many times per task** (≤ budget B) | pinned model; **attacker-side** |
+| **Judge** | Execute the frozen criterion to decide C1 (defect present / gate should hold) ∧ C2 (consumer adopts the corrupted field) ∧ C3 (terminal hazard), against a control replay. | **many times per task** (per attempt/repeat) | rule-based where an oracle exists; pinned LLM-judge only for irreducibly semantic hazards |
+
+**Ground-truth boundary (a design invariant).** Experimenter-side components —
+the Dispatcher's criterion head and the Judge — may legitimately use ground
+truth (the defect label, the independent oracle) because they **define and
+measure** success. The attacker-side **Generator must never see the oracle**: its
+refine loop consumes only attacker-observable signals (did the sink appear to
+flip, did the consumer route), under the P1 append-only constraint the Dispatcher
+enforces. When the Judge is an LLM, its model differs from both the criterion
+model and the victim model, to avoid self-preference.
+
+**Faithfulness is earned, not asserted.** Analyzer/Grafter outputs are not
+certified by human or model review; the **vulnerable** reference policy is the
+automatic reachability check (a real, connected path is exploitable under it) and
+the **defended** reference policy is the negative control (the same attack must
+fail closed). A real victim model's attack rate then sits between these
+references and is interpretable; a low rate against a frozen-but-correct path
+reflects model robustness, not mis-identification.
+
 ## Integrated target MAS
 
 Each adapter is a **faithful structural model** derived from the real system's

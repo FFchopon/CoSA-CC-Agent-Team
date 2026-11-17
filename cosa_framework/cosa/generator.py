@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from .permission import build_payload
+from .permission import APPEND_ONLY, MESSAGE_APPEND, build_payload
 from .spec import ContextInstance, Payload, TestSpecification
 
 
@@ -28,7 +28,8 @@ class PayloadGenerator:
         raise NotImplementedError
 
     def refine(self, spec: TestSpecification, context: ContextInstance,
-               previous: Payload, diagnosis: str, attempt: int) -> Payload:
+               previous: Payload, diagnosis: str, attempt: int,
+               hold_vector: Optional[bool] = None) -> Payload:
         raise NotImplementedError
 
 
@@ -51,6 +52,11 @@ class TemplatePayloadGenerator(PayloadGenerator):
     ]
     # Back-compat alias.
     LADDER = STRATEGIES
+
+    permission_mode: str = APPEND_ONLY   # P1 external source; P2 = "message_append"
+
+    def set_permission_mode(self, mode: str) -> None:
+        self.permission_mode = MESSAGE_APPEND if mode == MESSAGE_APPEND else APPEND_ONLY
 
     def _injection(self, spec: TestSpecification, context: ContextInstance,
                    strategy: str) -> str:
@@ -80,8 +86,8 @@ class TemplatePayloadGenerator(PayloadGenerator):
 
     def _payload(self, spec: TestSpecification, context: ContextInstance,
                  strategy: str, attempt: int, **extra: object) -> Payload:
-        content = build_payload(context.benign_source_value,
-                                self._injection(spec, context, strategy))
+        base = context.active_benign(self.permission_mode)   # P1 source / P2 message
+        content = build_payload(base, self._injection(spec, context, strategy))
         meta = {"framing": strategy, "strategy": strategy, "attempt": attempt,
                 "append_only_ok": True}
         meta.update(extra)
@@ -92,7 +98,10 @@ class TemplatePayloadGenerator(PayloadGenerator):
         return self._payload(spec, context, self.STRATEGIES[0], 1)
 
     def refine(self, spec: TestSpecification, context: ContextInstance,
-               previous: Payload, diagnosis: str, attempt: int) -> Payload:
+               previous: Payload, diagnosis: str, attempt: int,
+               hold_vector: Optional[bool] = None) -> Payload:
+        # Template search has no per-vector hill-climb, so hold_vector is advisory
+        # only: it always advances to the next distinct strategy.
         prev = previous.metadata.get("strategy", self.STRATEGIES[0])
         idx = self.STRATEGIES.index(prev) if prev in self.STRATEGIES else 0
         strategy = self.STRATEGIES[min(idx + 1, len(self.STRATEGIES) - 1)]

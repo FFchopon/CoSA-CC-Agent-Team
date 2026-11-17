@@ -104,3 +104,50 @@ def test_reflector_exhaust_payload_keeps_refining():
     assert Reflector().decide(report, attack, 0, Budgets(), False).action == Action.SELECT_NEW_PATH
     assert Reflector(exhaust_payload=True).decide(
         report, attack, 0, Budgets(), False).action == Action.REFINE_PAYLOAD
+
+
+def _report_at_depth(depth: int) -> JudgeReport:
+    """A JudgeReport whose first ``depth`` stages are SUPPORTED (0..3)."""
+    order = [Stage.C1_INCORRECT_COMMITMENT, Stage.C2_EFFECTIVE_ADOPTION,
+             Stage.C3_TERMINAL_OUTCOME]
+    stages = [StageVerdict(st, Verdict.SUPPORTED if i < depth else Verdict.REFUTED,
+                           [1] if i < depth else [], "")
+              for i, st in enumerate(order)]
+    return JudgeReport(spec_id="s", spec_version=1, stages=stages,
+                       chain_linked=False, attribution=False, complete_success=False)
+
+
+def test_adaptive_reflector_keeps_climbing_on_progress_and_switches_on_stall():
+    """Adaptive allocation holds a vector that advances a stage and switches a
+    stalled one — all via hold_vector, never exposing verdicts to the Generator."""
+    attack = EvidenceBundle("attack")
+    attack.record("exposure")
+    r = Reflector(exhaust_payload=True, adaptive=True, patience=2, max_vector_tries=5)
+    budgets = Budgets()  # per_path_retries=4, but we pass retries_used below
+
+    # Fresh vector seeded at depth 0 -> climb it.
+    d0 = r.decide(_report_at_depth(0), attack, 0, budgets, False)
+    assert d0.action == Action.REFINE_PAYLOAD and d0.hold_vector is True
+    # Mutation advances to depth 1 -> keep climbing (progress resets stall).
+    d1 = r.decide(_report_at_depth(1), attack, 1, budgets, False)
+    assert d1.hold_vector is True
+    # No further progress: first stall -> one more climb (patience=2).
+    d2 = r.decide(_report_at_depth(1), attack, 2, budgets, False)
+    assert d2.hold_vector is True
+    # Second stall reaches patience -> switch to a fresh vector.
+    d3 = r.decide(_report_at_depth(1), attack, 3, budgets, False)
+    assert d3.hold_vector is False
+    # After a switch the per-vector trackers reset: next result seeds a new vector.
+    d4 = r.decide(_report_at_depth(0), attack, 0, budgets, False)
+    assert d4.hold_vector is True
+
+
+def test_adaptive_reflector_caps_tries_per_vector():
+    """A vector that keeps advancing is still capped so it can't eat the budget."""
+    attack = EvidenceBundle("attack")
+    attack.record("exposure")
+    r = Reflector(exhaust_payload=True, adaptive=True, patience=9, max_vector_tries=3)
+    # Even with progress every step, max_vector_tries=3 forces a switch on try 3.
+    assert r.decide(_report_at_depth(0), attack, 0, Budgets(), False).hold_vector is True
+    assert r.decide(_report_at_depth(1), attack, 1, Budgets(), False).hold_vector is True
+    assert r.decide(_report_at_depth(1), attack, 2, Budgets(), False).hold_vector is False

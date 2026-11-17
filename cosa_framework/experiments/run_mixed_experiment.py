@@ -78,7 +78,10 @@ def build_campaign(target, ds, gen_ds=None, candidates_per_call=4,
                                hill_climb=hill_climb,
                                mutations_per_vector=mutations_per_vector),
         judge=HybridJudge(ds),             # deterministic verdicts + DeepSeek rationale
-        reflector=Reflector(exhaust_payload=True),             # run the search to budget
+        # Run the search to budget AND reallocate it adaptively: a vector that
+        # advances a stage earns more hill-climbs; a stalled one is cut early.
+        # Same total attempts — only their distribution across vectors changes.
+        reflector=Reflector(exhaust_payload=True, adaptive=True),
     )
 
 

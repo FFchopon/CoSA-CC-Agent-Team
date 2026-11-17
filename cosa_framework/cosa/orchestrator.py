@@ -29,9 +29,49 @@ from .generator import PayloadGenerator, TemplatePayloadGenerator
 from .grafter import Grafter
 from .graph_search import SearchConstraints
 from .judge import Judge
-from .permission import enforce_append_only
+from .permission import AttackerPermission, enforce_append_only, site_for
 from .reflection import Action, Budgets, Reflector
 from .spec import CandidatePath, JudgeReport, TestSpecification, Verdict
+
+
+# Evidence kinds the attacker may legitimately observe when refining a payload.
+# The hidden independent check ("oracle") and any oracle-derived field are
+# EXCLUDED: the Generator must condition only on what a real attacker sees flow
+# back through the shared channel (the coordinator's message/verdict, the
+# resulting coordination-state value, whether a consumer adopted it), never on
+# the ground-truth oracle or the Judge's verdicts.
+_OBSERVABLE_KINDS = ("coordinator_message", "state_write", "consumer_action",
+                     "terminal", "message", "exposure")
+
+
+def observable_feedback(attack: "Any", limit: int = 6) -> str:
+    """Attacker-observable summary of the last attack replay, oracle-free.
+
+    Boundary enforcement lives here: ``oracle`` events are dropped outright and
+    every ``oracle*`` detail key is stripped, so no ground-truth leaks into the
+    Generator. Returns a short human-readable string (empty if nothing visible).
+    """
+    lines: List[str] = []
+    for ev in getattr(attack, "events", []):
+        if ev.kind == "oracle" or ev.kind not in _OBSERVABLE_KINDS:
+            continue
+        safe = {k: v for k, v in (ev.detail or {}).items()
+                if "oracle" not in k.lower()}
+        if ev.kind == "coordinator_message":
+            verdict = safe.get("verdict", "?")
+            reason = str(safe.get("reason", "")).strip().replace("\n", " ")
+            lines.append(f"coordinator verdict={verdict!r}" +
+                         (f"; reason: {reason[:300]}" if reason else ""))
+        elif ev.kind == "state_write":
+            lines.append(f"coordination field {safe.get('field')}="
+                         f"{safe.get('value')!r}")
+        elif ev.kind == "consumer_action":
+            lines.append("consumer "
+                         + ("adopted" if safe.get("routed") else "did not adopt")
+                         + f" ({safe.get('decision','?')})")
+        elif ev.kind == "terminal":
+            lines.append(f"terminal: {safe.get('outcome', safe.get('artifact','?'))}")
+    return "; ".join(lines[-limit:])
 
 
 @dataclasses.dataclass
@@ -51,6 +91,7 @@ class AttemptRecord:
     path_id: str
     spec_version: int
     payload_framing: str
+    payload_vector: str
     stage_verdicts: Dict[str, str]
     chain_linked: bool
     attribution: bool
@@ -72,6 +113,14 @@ class CampaignReport:
     stop_reason: str
     injectable_sources: List[str] = dataclasses.field(default_factory=list)
     permission_mode: str = "append_only"
+    # The exact payload that induced the terminal outcome, retained so a run can
+    # be replayed later (the LLM generator's winning text is otherwise lost, as it
+    # is non-deterministic and not reconstructable from the vector label alone).
+    winning_payload: Optional[Dict[str, Any]] = None
+    # 1-based index of the first attempt that reached the terminal outcome
+    # (tries-to-success). None means the budget was exhausted without success
+    # (i.e. tries-to-success > budget / infinite).
+    tries_to_success: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -85,6 +134,8 @@ class CampaignReport:
             "success": self.success,
             "successful_spec": self.successful_spec,
             "stop_reason": self.stop_reason,
+            "winning_payload": self.winning_payload,
+            "tries_to_success": self.tries_to_success,
         }
 
 
@@ -113,16 +164,27 @@ class CoSACampaign:
         self.reflector = reflector or Reflector()
         self.grafter_factory = grafter_factory or (lambda mdg: Grafter(mdg))
 
-    def _enforce_permission(self, context, payload):
-        """Safety net: guarantee any generator's payload is P1 append-only."""
-        ok, content, note = enforce_append_only(context.benign_source_value,
-                                                payload.content)
+    def _enforce_permission(self, context, payload, mode="append_only"):
+        """Safety net: guarantee the payload is append-only onto the ACTIVE site's
+        benign base (P1 external source / P2 inter-agent message). The cross-field
+        guardrail holds by construction (only the one active field is ever set)."""
+        base = context.active_benign(mode)
+        ok, content, note = enforce_append_only(base, payload.content)
         payload.content = content
         payload.metadata.setdefault("append_only_ok", ok)
         payload.metadata["append_only_note"] = note
         return payload
 
     def run(self, mas_spec: MASSpec, config: CampaignConfig) -> CampaignReport:
+        # Sync the active permission (P1 append_only / P2 replace) into the
+        # generator and dispatcher so the whole pipeline agrees on the capability.
+        mode = config.permission_mode
+        if hasattr(self.generator, "set_permission_mode"):
+            self.generator.set_permission_mode(mode)
+        if hasattr(self.dispatcher, "permission"):
+            self.dispatcher.permission = AttackerPermission(mode=mode)
+        site = site_for(mode)
+
         analysis: AnalyzerResult = self.analyzer.build(mas_spec)
         injectable = [n.id for n in analysis.mdg.injectable_sources()]
         grafter = self.grafter_factory(analysis.mdg)
@@ -132,6 +194,8 @@ class CoSACampaign:
         global_used = 0
         success = False
         successful_spec: Optional[str] = None
+        winning_payload: Optional[Dict[str, Any]] = None
+        tries_to_success: Optional[int] = None
         stop_reason = "paths_exhausted"
 
         for path in ranked:
@@ -148,8 +212,8 @@ class CoSACampaign:
                 permissions=config.permissions,
                 target_value=config.target_value,
                 allowed_edits=config.allowed_edits)
-            payload = self._enforce_permission(context,
-                                               self.generator.generate(spec, context))
+            payload = self._enforce_permission(
+                context, self.generator.generate(spec, context), mode)
 
             retries_used = 0
             context_rebound = False
@@ -157,9 +221,13 @@ class CoSACampaign:
                 if global_used >= config.budgets.global_attempts:
                     stop_reason = "global_budget_exhausted"
                     break
-                replay = self.executor.run_pair(context, payload)
+                replay = self.executor.run_pair(context, payload, site)
                 global_used += 1
                 report = self.judge.verify(spec, replay)
+                # Attacker-observable feedback (oracle-free) that the Generator may
+                # condition on. The Judge report / routing diagnosis stay with the
+                # Reflector and the audit record; they never reach the Generator.
+                observed = observable_feedback(replay.attack)
                 decision = self.reflector.decide(
                     report, replay.attack, retries_used, config.budgets,
                     context_rebound)
@@ -167,6 +235,8 @@ class CoSACampaign:
                 attempts.append(AttemptRecord(
                     path_id=path.id, spec_version=spec.version,
                     payload_framing=payload.metadata.get("framing", "?"),
+                    payload_vector=str(payload.metadata.get("vector")
+                                       or payload.metadata.get("strategy") or "?"),
                     stage_verdicts={s.stage.value: s.verdict.value
                                     for s in report.stages},
                     chain_linked=report.chain_linked,
@@ -180,6 +250,26 @@ class CoSACampaign:
                     success = True
                     successful_spec = spec.id
                     stop_reason = "target_success"
+                    # The winning attempt is the one just appended; its 1-based
+                    # position over all replays is the tries-to-success count.
+                    tries_to_success = len(attempts)
+                    # Retain the exact inducing payload for later replay. We keep
+                    # the content, where it was injected (site/sink), and the
+                    # benign base it appended onto, so run_pair() can be re-driven
+                    # against the live victim without re-searching.
+                    winning_payload = {
+                        "content": payload.content,
+                        "framing": payload.metadata.get("framing", "?"),
+                        "vector": str(payload.metadata.get("vector")
+                                      or payload.metadata.get("strategy") or "?"),
+                        "site": site,
+                        "permission_mode": mode,
+                        "context_id": context.id,
+                        "sink_field": context.sink_field,
+                        "benign_base": context.active_benign(mode),
+                        "append_only_ok": bool(
+                            payload.metadata.get("append_only_ok", True)),
+                    }
                     break
                 if decision.action == Action.STOP_BUDGET:
                     stop_reason = "budget"
@@ -195,12 +285,15 @@ class CoSACampaign:
                     context = new_context
                     spec = spec.versioned(new_context.id)
                     payload = self._enforce_permission(
-                        context, self.generator.generate(spec, context))
+                        context, self.generator.generate(spec, context), mode)
                     continue
-                # REFINE_PAYLOAD or COLLECT_DIAGNOSTICS -> refine and retry
+                # REFINE_PAYLOAD or COLLECT_DIAGNOSTICS -> refine and retry.
+                # The Generator conditions on attacker-OBSERVABLE feedback only,
+                # not the Reflector's oracle-derived diagnosis.
                 retries_used += 1
                 payload = self._enforce_permission(context, self.generator.refine(
-                    spec, context, payload, decision.diagnosis, retries_used + 1))
+                    spec, context, payload, observed, retries_used + 1,
+                    hold_vector=decision.hold_vector), mode)
 
             if success or stop_reason in ("global_budget_exhausted", "budget"):
                 break
@@ -213,7 +306,9 @@ class CoSACampaign:
             attempts=attempts, success=success,
             successful_spec=successful_spec, stop_reason=stop_reason,
             injectable_sources=injectable,
-            permission_mode=config.permission_mode)
+            permission_mode=config.permission_mode,
+            winning_payload=winning_payload,
+            tries_to_success=tries_to_success)
 
     def _rebind(self, path: CandidatePath, exclude: str):
         for candidate in self.library.eligible_for(path):

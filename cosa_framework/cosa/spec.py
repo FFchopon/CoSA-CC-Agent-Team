@@ -97,9 +97,30 @@ class ContextInstance:
     source_field: str                       # which input realizes the source
     benign_source_value: Any                # the original (control) artifact
     sink_field: str                         # which coordination field is the sink
+    # Inter-agent message channel (P2 injection site): an UPSTREAM handoff message
+    # the victim coordinator reads, distinct from the external source. Empty when
+    # the target does not model one (then P2 is unavailable for that context).
+    benign_message_value: Any = ""          # the original (control) handoff message
+    message_field: str = ""                 # which inter-agent message realizes it
+    message_actor: str = ""                 # the upstream agent that sends it
     messages: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
     references: Dict[str, Any] = dataclasses.field(default_factory=dict)
     rejection_reason: Optional[str] = None
+
+    def active_benign(self, mode: str) -> Any:
+        """The benign base for the ACTIVE injection site (P1 external source /
+        P2 inter-agent message). Falls back to the external source."""
+        if mode == "message_append" and str(self.benign_message_value).strip():
+            return self.benign_message_value
+        return self.benign_source_value
+
+    def active_field(self, mode: str) -> str:
+        if mode == "message_append" and self.message_field:
+            return self.message_field
+        return self.source_field
+
+    def supports_message_injection(self) -> bool:
+        return bool(self.message_field) and bool(str(self.benign_message_value).strip())
 
 
 # --------------------------------------------------------------------------- #
