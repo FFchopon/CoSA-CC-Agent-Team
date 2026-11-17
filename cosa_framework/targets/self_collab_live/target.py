@@ -83,6 +83,52 @@ def _read(path: str) -> str:
         return f.read()
 
 
+_OPENAI_PATCHED = False
+
+
+def _install_openai_param_compat() -> None:
+    """Make the `openai` client tolerant of newer-model param rules, WITHOUT
+    touching upstream code. Self-collaboration's backend sends ``max_tokens`` and
+    ``temperature``; newer OpenAI models reject ``max_tokens`` (require
+    ``max_completion_tokens``) and some reject a non-default ``temperature``. We
+    wrap ``Completions.create`` to translate / drop the offending parameter on the
+    specific 400 and retry, so the real upstream review path runs unchanged against
+    such a victim model. Idempotent; a no-op if ``openai`` is absent."""
+    global _OPENAI_PATCHED
+    if _OPENAI_PATCHED:
+        return
+    try:
+        import openai
+        from openai import BadRequestError
+        Completions = openai.resources.chat.completions.Completions
+    except Exception:
+        return
+    orig_create = Completions.create
+
+    def create(self, *args, **kwargs):
+        for _ in range(4):
+            try:
+                return orig_create(self, *args, **kwargs)
+            except BadRequestError as exc:
+                msg = str(exc)
+                if ("max_tokens" in msg and "max_completion_tokens" in msg
+                        and "max_tokens" in kwargs):
+                    kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+                    continue
+                if ("temperature" in msg and "temperature" in kwargs
+                        and ("unsupported" in msg.lower() or "does not support" in msg.lower()
+                             or "only the default" in msg.lower())):
+                    kwargs.pop("temperature")
+                    continue
+                raise
+        return orig_create(self, *args, **kwargs)
+
+    create.__cosa_param_compat__ = True
+    if not getattr(Completions.create, "__cosa_param_compat__", False):
+        Completions.create = create
+    _OPENAI_PATCHED = True
+
+
 def _entry_point(task: SelfCollabTask) -> str:
     """The function name the Tester imports from solution.py (`def NAME(`)."""
     for text in (task.buggy_code, task.requirement):
@@ -96,6 +142,19 @@ def _load_upstream(cfg: SelfCollabLiveConfig):
     """Import the upstream modules from the checkout (added to sys.path once)."""
     if cfg.repo_root not in sys.path:
         sys.path.insert(0, cfg.repo_root)
+    # run_humaneval imports `datasets` at module load for the HumanEval dataset,
+    # but the Tester path we drive (_generate_tests / _run_generated_test) never
+    # uses it. Stub it when absent so the review path does not require a heavy,
+    # unused dependency; if `datasets` is installed, the real module is used.
+    import types as _types
+    try:
+        importlib.import_module("datasets")
+    except Exception:
+        stub = _types.ModuleType("datasets")
+        stub.load_dataset = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("datasets is stubbed in self_collab_live; the Tester path "
+                         "does not load a dataset"))
+        sys.modules.setdefault("datasets", stub)
     # Fresh import so a different checkout in the same process is honored.
     rh = importlib.import_module("run_humaneval")
     cc = importlib.import_module("core.config")
@@ -169,6 +228,7 @@ class SelfCollabLiveTarget:
     def run(self, source_value: Any, recorder: EvidenceBundle) -> None:
         preflight(self.config)
         rh, cc = _load_upstream(self.config)
+        _install_openai_param_compat()   # tolerate newer-model param rules
         config_obj = self._model_config(cc)
 
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
