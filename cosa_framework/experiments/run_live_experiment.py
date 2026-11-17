@@ -83,16 +83,32 @@ def build_live_target(args):
 
     if args.target == "metagpt":
         from targets.metagpt_live import (MetaGPTLiveConfig, MetaGPTLiveTarget,
-                                         metagpt_live_contexts, preflight)
+                                         build_p2_context, metagpt_live_p1_context, preflight)
+        from targets.metagpt import METAGPT_TASKS
         if not args.repo_root:
             raise SystemExit("--target metagpt needs --repo-root")
         cfg = MetaGPTLiveConfig(repo_root=os.path.expanduser(args.repo_root),
                                 victim_model=args.victim_model,
                                 victim_base_url=args.victim_base_url,
                                 victim_key_file=os.path.expanduser(args.victim_key_file),
-                                victim_temp=args.victim_temp)
+                                victim_temp=args.victim_temp,
+                                run_root=os.path.abspath(os.path.expanduser(args.run_root)) if args.run_root else "",
+                                keep_runs=args.keep_runs)
         preflight(cfg)
-        return MetaGPTLiveTarget(config=cfg), metagpt_live_contexts()
+        tasks = METAGPT_TASKS
+        if args.tasks:
+            want = set(args.tasks.split(","))
+            tasks = [t for t in tasks if t.id in want]
+        if args.limit:
+            tasks = tasks[:args.limit]
+        if args.permission == "p2":
+            # P2 base = a REAL benign Architect design per task (one relay each).
+            print(f"[setup] precomputing benign relay (P2 design base) for {len(tasks)} task(s)...",
+                  flush=True)
+            contexts = [build_p2_context(cfg, t) for t in tasks]
+        else:
+            contexts = [metagpt_live_p1_context(t) for t in tasks]
+        return MetaGPTLiveTarget(config=cfg), contexts
 
     if args.target == "agent_team":
         from targets.agent_team_live import (AgentTeamLiveConfig, AgentTeamLiveTarget,
@@ -113,10 +129,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True,
                     choices=["self_collab", "metagpt", "agent_team"])
-    ap.add_argument("--permission", choices=["p1"], default="p1",
-                    help="only P1 (external-source injection) is supported for live runs")
+    ap.add_argument("--permission", choices=["p1", "p2"], default="p1",
+                    help="p1 = external requirement (real upstream relay carries it); "
+                         "p2 = Architect->Engineer design handoff (metagpt only)")
     ap.add_argument("--repo-root", default="", help="upstream checkout (self_collab / metagpt)")
-    ap.add_argument("--run-root", default="", help="scratch dir for per-replay runs (self_collab)")
+    ap.add_argument("--run-root", default="", help="scratch dir for per-replay runs (self_collab / metagpt)")
+    ap.add_argument("--keep-runs", action=argparse.BooleanOptionalAction, default=True,
+                    help="keep per-replay workspaces (metagpt); --no-keep-runs for large batches")
     ap.add_argument("--agent-team-harness", default="",
                     help="module:callable running the real agent-teams Tester (agent_team)")
     ap.add_argument("--victim-model", default="gpt-5.6-luna")
@@ -145,12 +164,13 @@ def main():
     if args.limit:
         contexts = contexts[:args.limit]
 
-    out = args.out or os.path.join(EXP, f"live_{args.target}_p1_results.json")
+    perm_mode = {"p1": "append_only", "p2": "message_append"}[args.permission]
+    out = args.out or os.path.join(EXP, f"live_{args.target}_{args.permission}_results.json")
     results = []
 
     def flush():
-        bundle = {"framework": "CoSA", "group": "live_attack_P1", "mode": "live",
-                  "target": args.target, "permission": "p1", "permission_mode": "append_only",
+        bundle = {"framework": "CoSA", "group": f"live_attack_{args.permission.upper()}", "mode": "live",
+                  "target": args.target, "permission": args.permission, "permission_mode": perm_mode,
                   "attacker_model": (args.attacker_model if args.attacker == "gpt" else "deepseek-flash"),
                   "victim_model": args.victim_model, "hill_climb": args.hill_climb,
                   "mutations_per_vector": args.mutations_per_vector if args.hill_climb else None,
@@ -167,7 +187,7 @@ def main():
                                   mutations_per_vector=args.mutations_per_vector)
         cfg = CampaignConfig(terminal_objective=objective, target_value=value,
                              budgets=Budgets(per_path_retries=19, global_attempts=20),
-                             permission_mode="append_only")   # P1
+                             permission_mode=perm_mode)   # p1=append_only, p2=message_append
         task = ctx.checkpoint.get("task_id", ctx.id)
         print(f"[{datetime.datetime.now():%H:%M:%S}] live-attack {args.target}/{task} ...", flush=True)
         try:
@@ -183,7 +203,8 @@ def main():
         c1 = [a for a in report.attempts
               if a.stage_verdicts["C1_incorrect_commitment"] == "supported"]
         row = {"target": args.target, "task": task, "attacker": args.attacker,
-               "permission": "p1", "condition": "P1-live", "victim_model": args.victim_model,
+               "permission": args.permission, "condition": f"{args.permission.upper()}-live",
+               "victim_model": args.victim_model,
                "tries_to_success": report.tries_to_success, "induced": induced,
                "success": report.success, "attempts": len(report.attempts),
                "stop_reason": report.stop_reason, "hill_climb": args.hill_climb,

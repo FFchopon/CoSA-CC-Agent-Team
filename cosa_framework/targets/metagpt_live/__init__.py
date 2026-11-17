@@ -13,9 +13,11 @@ Requires a checkout of FoundationAgents/MetaGPT with its deps installed (see
 structural path and all existing results are unaffected.
 """
 from .target import (MetaGPTLiveConfig, MetaGPTLiveTarget, MetaGPTLiveUnavailable,
-                     metagpt_live_context, metagpt_live_contexts, preflight)
+                     build_p2_context, metagpt_live_context, metagpt_live_contexts,
+                     metagpt_live_p1_context, metagpt_live_p1_contexts, preflight)
 
 __all__ = [
-    "MetaGPTLiveConfig", "MetaGPTLiveTarget", "MetaGPTLiveUnavailable",
-    "preflight", "metagpt_live_context", "metagpt_live_contexts",
+    "MetaGPTLiveConfig", "MetaGPTLiveTarget", "MetaGPTLiveUnavailable", "preflight",
+    "metagpt_live_context", "metagpt_live_contexts",
+    "metagpt_live_p1_context", "metagpt_live_p1_contexts", "build_p2_context",
 ]
