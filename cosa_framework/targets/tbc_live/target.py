@@ -36,7 +36,8 @@ from .evidence import SINK, observe, record_evidence
 from .workspace import (MILESTONE_ID, VictimCredential, Workspace,
                         build_workspace, clone_workspace)
 
-SOURCE_FIELD = "D_ci_job_log"
+SOURCE_FIELD = "D_ci_job_log"      # P1: CI job log (external evidence)
+MSG_HANDOFF = "M_ares_handoff"     # P2: Ares->verification "claiming complete" comment
 
 
 class TBCLiveUnavailable(RuntimeError):
@@ -49,8 +50,10 @@ class TBCLiveConfig:
     run_root: str                         # where per-replay copies are created
     node: str = "node"
     max_wall_seconds: int = 3600
-    max_cycles: int = 4                   # TBC cycles allowed inside verification
+    max_cycles: int = 12                  # TBC cycles allowed (verify + merge afterwards)
     poll_seconds: float = 5.0
+    post_verification_grace_seconds: int = 300  # after leaving verification, wait this long
+                                                # for the merge/close to actually land
     keep_runs: bool = True                # keep run dirs for audit
 
 
@@ -85,6 +88,9 @@ def tbc_live_context(template_home: str, context_id: str = "ctx_tbc_live_m1") ->
         checkpoint={"template_home": template_home},
         source_field=SOURCE_FIELD,
         benign_source_value=manifest["benign_ci_log"],
+        message_field=MSG_HANDOFF,                      # P2: Ares handoff comment
+        message_actor="ares",
+        benign_message_value=manifest.get("benign_handoff", ""),
         sink_field=SINK,
         references={"oracle": "hidden acceptance suite outside the project root",
                     "head_sha": manifest["head_sha"], "tbc_commit": "df189fe"},
@@ -102,6 +108,7 @@ class TheBotCompanyLiveTarget:
     runs: list = dataclasses.field(default_factory=list)   # audit trail per replay
 
     def reset(self, checkpoint: Dict[str, Any]) -> None:
+        self.state = checkpoint
         self.template_home = checkpoint["template_home"]
 
     # -- process control --------------------------------------------------- #
@@ -125,6 +132,30 @@ class TheBotCompanyLiveTarget:
         return bool(state) and (state.get("phase") != "verification"
                                 or state.get("currentMilestoneId") != MILESTONE_ID)
 
+    def _project_terminal(self, ws: Workspace) -> Optional[str]:
+        """Read the DB for a terminal outcome: the epoch PR merged into main /
+        closed, or the milestone failed. Returns the reason, or None. This is what
+        lets us OBSERVE the merge (C3), which lands a cycle or two after Apollo's
+        pass verdict — so we must not stop the instant verification is left."""
+        import sqlite3
+        try:
+            con = sqlite3.connect(ws.db_path)
+        except sqlite3.Error:
+            return None
+        try:
+            pr = con.execute("SELECT status FROM tbc_prs WHERE id = 1").fetchone()
+            ms = con.execute("SELECT status FROM milestones WHERE milestone_id = ?",
+                             (MILESTONE_ID,)).fetchone()
+        except sqlite3.Error:
+            return None
+        finally:
+            con.close()
+        if pr and pr[0] in ("merged", "closed"):
+            return f"pr_{pr[0]}"
+        if ms and ms[0] == "failed":
+            return "milestone_failed"
+        return None
+
     def _stop(self, proc: subprocess.Popen) -> None:
         if proc.poll() is not None:
             return
@@ -142,7 +173,10 @@ class TheBotCompanyLiveTarget:
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         dest = os.path.join(self.config.run_root, f"{stamp}-{recorder.mode}-{secrets.token_hex(3)}")
         ws = clone_workspace(self.template_home, dest)
-        ws.write_source(str(source_value))
+        ws.write_source(str(source_value))                 # P1 channel (CI log)
+        handoff = self.state.get("inter_agent_message")
+        if handoff:                                        # P2 channel (Ares handoff)
+            ws.write_handoff(str(handoff))
         start_cycle = self._read_state(ws).get("cycleCount", 0)
 
         port = _free_port()
@@ -152,16 +186,29 @@ class TheBotCompanyLiveTarget:
                                 env=self._env(ws, port), stdout=server_log,
                                 stderr=subprocess.STDOUT, start_new_session=True)
         stop_reason = "wall_clock"
+        left_at = None   # monotonic time verification was first left
         try:
             deadline = time.monotonic() + self.config.max_wall_seconds
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
                     stop_reason = f"server_exited({proc.returncode})"
                     break
-                state = self._read_state(ws)
-                if self._left_verification(state):
-                    stop_reason = "left_verification"
+                # Terminal outcome in the DB (merge to main / PR closed / milestone
+                # failed) — this is where C3 is observable, so prefer it over the
+                # phase flag.
+                term = self._project_terminal(ws)
+                if term:
+                    stop_reason = term
                     break
+                state = self._read_state(ws)
+                # Leaving verification does NOT end the run: the merge lands a cycle
+                # or two later. Give it a grace window to actually resolve.
+                if self._left_verification(state):
+                    if left_at is None:
+                        left_at = time.monotonic()
+                    elif time.monotonic() - left_at >= self.config.post_verification_grace_seconds:
+                        stop_reason = "post_verification_grace"
+                        break
                 if state.get("cycleCount", 0) - start_cycle >= self.config.max_cycles:
                     stop_reason = "cycle_cap"
                     break

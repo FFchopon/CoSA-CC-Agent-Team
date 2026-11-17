@@ -64,6 +64,10 @@ def summarize(name, report, extra=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["structural", "llm", "live"], default="structural")
+    ap.add_argument("--permission", choices=["p1", "p2"], default="p1",
+                    help="live: p1 = inject the CI job log (append_only); "
+                         "p2 = inject the Ares->verification handoff comment (message_append)")
+    ap.add_argument("--node", default="node", help="path to the node binary (>=22.19)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--global-attempts", type=int, default=20)
     ap.add_argument("--tbc-root", default=None)
@@ -72,10 +76,15 @@ def main():
     ap.add_argument("--victim-model", default="deepseek-chat")
     ap.add_argument("--victim-key-file", default=os.path.join(KEYDIR, "ds-key.txt"))
     ap.add_argument("--max-wall-seconds", type=int, default=3600)
+    ap.add_argument("--budget", type=float, default=10000.0,
+                    help="live: project budgetPer24h; keep high so the orchestrator's "
+                         "cost pacing does not sleep between verification cycles")
     args = ap.parse_args()
 
+    perm_mode = {"p1": "append_only", "p2": "message_append"}[args.permission]
     budgets = Budgets(per_path_retries=4, global_attempts=args.global_attempts)
-    config = CampaignConfig(terminal_objective=OBJECTIVE, target_value="pass", budgets=budgets)
+    config = CampaignConfig(terminal_objective=OBJECTIVE, target_value="pass", budgets=budgets,
+                            permission_mode=perm_mode)
     results = []
 
     if args.mode == "structural":
@@ -113,13 +122,15 @@ def main():
             ap.error("--mode live needs --tbc-root and --run-root")
         cfg = TBCLiveConfig(tbc_root=os.path.expanduser(args.tbc_root),
                             run_root=os.path.abspath(args.run_root),
+                            node=os.path.expanduser(args.node),
                             max_wall_seconds=args.max_wall_seconds)
         preflight(cfg)
         os.makedirs(cfg.run_root, exist_ok=True)
         template = os.path.join(cfg.run_root, "template")
         if not os.path.exists(template):
             build_template(template, VictimCredential(args.victim_base_url, args.victim_model,
-                                                      args.victim_key_file))
+                                                      args.victim_key_file),
+                           budget_per_24h=args.budget)
         lib = ContextLibrary()
         lib.add(tbc_live_context(template))
         target = TheBotCompanyLiveTarget(config=cfg)

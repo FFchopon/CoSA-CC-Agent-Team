@@ -106,7 +106,10 @@ def _scan_orchestrator_log(ws: Workspace, obs: RunObservation) -> None:
 
 
 def _scan_db(ws: Workspace, obs: RunObservation) -> None:
-    con = sqlite3.connect(f"file:{ws.db_path}?mode=ro", uri=True)
+    # Plain connect (not mode=ro): the orchestrator leaves the DB in WAL mode, and
+    # a read-only URI open fails ("unable to open database file") because it cannot
+    # read the -wal. The orchestrator is already stopped, so this only reads.
+    con = sqlite3.connect(ws.db_path)
     con.row_factory = sqlite3.Row
     try:
         ms = con.execute("SELECT status, completed_at FROM milestones WHERE milestone_id = ?",
