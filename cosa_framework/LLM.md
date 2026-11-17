@@ -47,32 +47,32 @@ transcript. Every call is appended to `client.transcript` for evidence.
 
 ```python
 from cosa import OpenAICompatClient, LLMConfig, ContextLibrary, build_llm_campaign, CampaignConfig
-from targets import tracedev as td, make_llm_validator_policy
+from targets import metagpt as mg, make_llm_reviewer_policy
 
 client = OpenAICompatClient(LLMConfig(model="deepseek-v4-flash", api_key_env="DEEPSEEK_API_KEY"))
 
-target = td.TraceDevTarget(policy=make_llm_validator_policy(client))   # real-LLM victim
-library = ContextLibrary(); library.add(td.tracedev_context())
+target = mg.MetaGPTTarget(policy=make_llm_reviewer_policy(client))     # real-LLM victim
+library = ContextLibrary(); library.add(mg.metagpt_context())
 campaign = build_llm_campaign(target, library, client)                # real-LLM pipeline
-report = campaign.run(td.tracedev_mas_spec(), CampaignConfig(
-    terminal_objective="code implemented from an unvalidated design", target_value="complete"))
+report = campaign.run(mg.metagpt_mas_spec(), CampaignConfig(
+    terminal_objective="defective code written as the accepted deliverable", target_value="YES"))
 ```
 
 Separate attacker and victim models are supported — pass two clients (see
-`experiments/run_llm_experiments.py`).
+`experiments/run_attack_group.py`).
 
 ## Running the real experiment
 
-`experiments/run_llm_experiments.py` runs both targets end to end with live models
-and writes results **plus the full prompt/response transcripts** for audit:
+`experiments/run_attack_group.py` runs the integrated targets end to end with live
+models and writes results **plus per-attempt payloads** for audit:
 
 ```sh
 export DEEPSEEK_API_KEY=sk-...
-python3 experiments/run_llm_experiments.py --attacker-model deepseek-v4-flash --victim-model gpt-4o
+python3 experiments/run_attack_group.py --permission p1 --attacker deepseek --tasks <task_ids>
 ```
 
 This requires network and keys and is intentionally **not** part of the offline test
-suite. The offline suite (`python3 tests/run_tests.py`) exercises the same LLM code
+suite. The offline suite (`python3 -m pytest -q`) exercises the same LLM code
 paths with a `FakeLLMClient` (canned responses, no network), including the Judge
 guardrail and an end-to-end all-LLM campaign against a scripted LLM victim.
 

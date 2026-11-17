@@ -52,15 +52,13 @@ Each adapter is a **faithful structural model** derived from the real system's
 source, deterministic and model-free, with the coordination decision exposed as a
 **pluggable policy** — swap in `llm_policies` to make that coordinator a real LLM.
 
+A `*_live` adapter additionally drives the real upstream code (see `LIVE_RUN.md`).
+
 | Adapter | Models | Sink (coordination field) |
 |---|---|---|
-| `dev_team` | reference target (offline) | tester verdict |
-| `self_collab` | [Self-collaboration Code Generation](https://github.com/YihongDong/Self-collaboration-Code-Generation) | Tester accept/reject |
-| `tracedev` | [TraceDev](https://github.com/ISSE-Lab/ISSTA2026-TraceDev) | Validator complete/incomplete |
-| `agent_team` | shared-task-list coder/tester/committer | release verdict |
-| `thebotcompany` (`tbc_live`) | TheBotCompany (two-hop verify → Apollo) | milestone verify pass/fail |
-| `trading_agents` | [TradingAgents](https://github.com/TauricResearch/TradingAgents) | Research-Manager consensus |
-| `metagpt` | [MetaGPT](https://github.com/FoundationAgents/MetaGPT) | code-review verdict |
+| `metagpt` (`metagpt_live`) | [MetaGPT](https://github.com/FoundationAgents/MetaGPT) software company | code-review verdict |
+| `thebotcompany` (`tbc_live`) | [TheBotCompany](https://github.com/syifan/thebotcompany) (two-hop verify → Apollo) | milestone verify pass/fail |
+| `agent_team` / GatedTeam (`agent_team_live`) | shared-task-list coder/tester/committer | release verdict |
 
 The victim coordinator model is configurable (any OpenAI-compatible endpoint, e.g.
 DeepSeek / Kimi / GPT / Claude). API keys are read at run time from a local key
@@ -69,13 +67,17 @@ directory via `api_key_file` and are **never committed**.
 ## Run it
 
 ```sh
-# Offline end-to-end campaign against the reference target (no deps, no network):
-python3 examples/run_dev_team_campaign.py             # vulnerable policy -> success
-python3 examples/run_dev_team_campaign.py --defended  # oracle-gated     -> fails closed
+# Offline test suite (deterministic; no deps, no network, no keys):
+python3 -m pytest -q
 
-# Test suite (dependency-free runner; files are also pytest-compatible):
-python3 tests/run_tests.py
+# Attack campaign against the structural targets (needs attacker + victim keys):
+python3 experiments/run_attack_group.py --permission p1 --tasks <task_ids>
+
+# Benign baseline (no injection):
+python3 experiments/run_baseline.py --target metagpt
 ```
+
+Driving a target's real upstream code is documented in `LIVE_RUN.md`.
 
 Real-LLM campaigns live under `experiments/` (e.g. `run_attack_group.py`,
 `run_mixed_experiment.py`), configured per target with `--attacker` / victim-model

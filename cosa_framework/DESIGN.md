@@ -207,8 +207,9 @@ cosa/judge.py          Per-stage verdicts + linked-chain + attribution
 cosa/reflection.py     Diagnosis -> next action, under budgets
 cosa/orchestrator.py   Workflow controller: whole campaign + report
 targets/base.py        TargetMAS adapter interface + EvidenceRecorder
-targets/dev_team.py    Deterministic reference MAS (Coder/Tester/Committer)
-examples/run_dev_team_campaign.py   End-to-end campaign on the reference target
+targets/agent_team.py  GatedTeam reference MAS (Coder/Tester/Committer, shared task list)
+targets/metagpt.py     MetaGPT software company (structural model)
+targets/thebotcompany.py  TheBotCompany autonomous dev team (structural model)
 tests/                 Unit + end-to-end tests (no network, no model)
 ```
 
@@ -217,9 +218,8 @@ tests/                 Unit + end-to-end tests (no network, no model)
 `lab.py` and the `run_*` scripts are one hard-coded instantiation of this exact
 chain (untrusted CI text → T2 completed despite oracle FAIL → T3 eligible →
 package). This framework generalizes that single instance into the methodology:
-the dev-team target in `targets/dev_team.py` reproduces the same scenario through
+the GatedTeam target in `targets/agent_team.py` reproduces the same scenario through
 the adapter interface, driven by the five-agent pipeline instead of a fixed prompt.
-The existing files are left unchanged.
 
 ## 6. Scope and honesty
 
