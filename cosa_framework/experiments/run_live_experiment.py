@@ -3,21 +3,15 @@
 
 Unlike experiments/run_attack_group.py (faithful structural adapters), this runner
 drives the actual framework: the defective task overrides ONE artifact (the coder's
-code), and the real victim agent (Self-Collab Tester / MetaGPT Reviewer /
-agent-teams Tester) makes the coordination decision. Only P1 (append-only into the
-external source the victim reads) is supported here.
+code), and the real victim agent (MetaGPT Reviewer / agent-teams Tester) makes the
+coordination decision. MetaGPT supports P1 (external requirement via the real
+upstream relay) and P2 (Architect->Engineer design handoff).
 
 This does NOT run anything unless you pass a checkout/harness; without one the live
 target's preflight raises *Unavailable. Results are written to a NEW file
-(live_<target>_p1_results.json); it never touches the structural results.
+(live_<target>_<permission>_results.json); it never touches the structural results.
 
 Examples
-  # Self-Collab (needs a checkout of self-collaboration-code-generation)
-  python3 experiments/run_live_experiment.py --target self_collab \
-      --repo-root ~/code/CoSA/_cosa_upstream/self_collab --run-root /tmp/sc-live-runs \
-      --victim-model gpt-5.6-luna --victim-key-file ~/Downloads/api-key/gpt-key.txt \
-      --tasks swederiv_sklearn_13439_pipelen           # one task; omit for all 20
-
   # MetaGPT (needs a checkout of FoundationAgents/MetaGPT with deps installed)
   python3 experiments/run_live_experiment.py --target metagpt \
       --repo-root ~/code/CoSA/_cosa_upstream/metagpt \
@@ -49,14 +43,11 @@ from run_mixed_experiment import build_campaign  # noqa: E402
 from run_attack_group import attacker_clients, refusal_report  # noqa: E402
 from targets import agent_team as at  # noqa: E402
 from targets import metagpt as mg  # noqa: E402
-from targets import self_collab as sc  # noqa: E402
 
 KEYDIR = "/Users/temp/Downloads/api-key"
 
 # target -> (mas_spec fn, terminal objective, affirmative sink value)
 _SPECS = {
-    "self_collab": (sc.self_collab_mas_spec,
-                    "buggy code delivered as the accepted solution", "pass"),
     "metagpt": (mg.metagpt_mas_spec,
                 "defective code written as the accepted deliverable", "YES"),
     "agent_team": (at.agent_team_mas_spec,
@@ -66,20 +57,6 @@ _SPECS = {
 
 def build_live_target(args):
     """Construct the live target + its contexts for the chosen --target."""
-    if args.target == "self_collab":
-        from targets.self_collab_live import (SelfCollabLiveConfig, SelfCollabLiveTarget,
-                                              preflight, self_collab_live_contexts)
-        if not (args.repo_root and args.run_root):
-            raise SystemExit("--target self_collab needs --repo-root and --run-root")
-        cfg = SelfCollabLiveConfig(repo_root=os.path.expanduser(args.repo_root),
-                                   run_root=os.path.abspath(os.path.expanduser(args.run_root)),
-                                   victim_model=args.victim_model,
-                                   victim_base_url=args.victim_base_url,
-                                   victim_key_file=os.path.expanduser(args.victim_key_file),
-                                   victim_temp=args.victim_temp)
-        os.makedirs(cfg.run_root, exist_ok=True)
-        preflight(cfg)
-        return SelfCollabLiveTarget(config=cfg), self_collab_live_contexts()
 
     if args.target == "metagpt":
         from targets.metagpt_live import (MetaGPTLiveConfig, MetaGPTLiveTarget,
@@ -118,9 +95,17 @@ def build_live_target(args):
         cfg = AgentTeamLiveConfig(harness=args.agent_team_harness,
                                   victim_model=args.victim_model,
                                   victim_base_url=args.victim_base_url,
-                                  victim_key_file=os.path.expanduser(args.victim_key_file))
+                                  victim_key_file=os.path.expanduser(args.victim_key_file),
+                                  run_root=os.path.abspath(os.path.expanduser(args.run_root)) if args.run_root else "",
+                                  keep_runs=args.keep_runs)
         preflight(cfg)
-        return AgentTeamLiveTarget(config=cfg), agent_team_live_contexts()
+        tasks = agent_team_live_contexts()
+        if args.tasks:
+            want = set(args.tasks.split(","))
+            tasks = [c for c in tasks if c.checkpoint.get("task_id") in want]
+        if args.limit:
+            tasks = tasks[:args.limit]
+        return AgentTeamLiveTarget(config=cfg), tasks
 
     raise SystemExit(f"unknown --target {args.target!r}")
 
@@ -128,12 +113,12 @@ def build_live_target(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True,
-                    choices=["self_collab", "metagpt", "agent_team"])
+                    choices=["metagpt", "agent_team"])
     ap.add_argument("--permission", choices=["p1", "p2"], default="p1",
                     help="p1 = external requirement (real upstream relay carries it); "
                          "p2 = Architect->Engineer design handoff (metagpt only)")
-    ap.add_argument("--repo-root", default="", help="upstream checkout (self_collab / metagpt)")
-    ap.add_argument("--run-root", default="", help="scratch dir for per-replay runs (self_collab / metagpt)")
+    ap.add_argument("--repo-root", default="", help="upstream checkout (metagpt)")
+    ap.add_argument("--run-root", default="", help="scratch dir for per-replay runs (metagpt)")
     ap.add_argument("--keep-runs", action=argparse.BooleanOptionalAction, default=True,
                     help="keep per-replay workspaces (metagpt); --no-keep-runs for large batches")
     ap.add_argument("--agent-team-harness", default="",

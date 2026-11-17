@@ -24,9 +24,6 @@ from cosa import (Analyzer, Budgets, CampaignConfig, ContextLibrary,  # noqa: E4
                   CoSACampaign, LLMConfig, OpenAICompatClient, Reflector)
 from cosa.llm_agents import (HybridJudge, LLMDispatcher, LLMGenerator,  # noqa: E402
                              LLMGrafter)
-from targets import make_llm_tester_policy, make_llm_validator_policy  # noqa: E402
-from targets import self_collab as sc  # noqa: E402
-from targets import tracedev as td  # noqa: E402
 
 KEYDIR = "/Users/temp/Downloads/api-key"
 
@@ -135,52 +132,15 @@ def main():
                                                        "mixed_llm_results.json"))
     args = parser.parse_args()
 
-    results = []
-    transcripts = {}
-    targets = [
-        ("tracedev", make_llm_validator_policy, td.TraceDevTarget,
-         td.tracedev_context(), td.tracedev_mas_spec(),
-         "code implemented from an unvalidated design", "complete"),
-        ("self_collab", make_llm_tester_policy, sc.SelfCollabTarget,
-         sc.self_collab_context(), sc.self_collab_mas_spec(),
-         "buggy code delivered as the accepted solution", "pass"),
-    ]
-    for name, make_policy, cls, context, spec, objective, value in targets:
-        ds = deepseek_client()
-        victim = kimi_client()
-        target = cls(policy=make_policy(victim))
-        try:
-            results.append(run_target(name, target, context, spec, objective,
-                                      value, ds, victim))
-        except Exception:
-            print(f"[ERROR] {name}:\n{traceback.format_exc()}", flush=True)
-            results.append({"target": name, "error": traceback.format_exc(),
-                            "attacker_deepseek_calls": role_counts(ds),
-                            "victim_kimi_calls": role_counts(victim)})
-        transcripts[name] = {"attacker_deepseek": ds.transcript,
-                             "victim_kimi": victim.transcript}
-
-    bundle = {
-        "framework": "CoSA", "mode": "real_llm_mixed",
-        "config": {"analyzer": "human (source-derived MDG)",
-                   "attacker_agents": "deepseek-flash",
-                   "victim_coordinator": "kimi-k2.6"},
-        "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "results": results, "transcripts": transcripts}
-    with open(args.out, "w") as f:
-        json.dump(bundle, f, indent=2, ensure_ascii=False)
-
-    print("\n" + "=" * 56)
-    print(f"{'target':<13}{'success':<9}{'attempts':<9}stop_reason")
-    print("-" * 56)
-    for r in results:
-        if "error" in r:
-            print(f"{r['target']:<13}ERROR")
-        else:
-            print(f"{r['target']:<13}{str(r['success']):<9}"
-                  f"{len(r['attempts']):<9}{r['stop_reason']}")
-    print(f"\nFull evidence + transcripts -> {args.out}")
-    return 0
+    _ = args
+    # This module is retained for its shared helpers (client factories,
+    # build_campaign / build_llm_campaign / run_target / role_counts) imported by
+    # the live and attack runners. Its standalone demo targets (self_collab,
+    # tracedev) were removed; use experiments/run_live_experiment.py or
+    # run_attack_group.py for the integrated targets (metagpt / thebotcompany /
+    # agent_team).
+    raise SystemExit("run_mixed_experiment is a helper module; run run_live_experiment.py "
+                     "or run_attack_group.py instead.")
 
 
 if __name__ == "__main__":

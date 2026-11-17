@@ -8,17 +8,16 @@ from cosa.permission import AttackerPermission, site_for
 from cosa.spec import Payload
 from cosa.analyzer import MASSpec
 from cosa.graph_search import SearchConstraints
-from targets import (DevTeamTarget, VulnerableTesterPolicy, dev_team_context,
-                     dev_team_mas_spec)
-from targets import self_collab as sc
-from targets import tracedev as td
+from targets import agent_team as at
+from targets.agent_team import (AgentTeamTarget, VulnerableTesterPolicy,
+                                agent_team_context, agent_team_mas_spec)
 
 
 # -- P2 (inter-agent-message append-only) ----------------------------------- #
 def test_p2_is_append_only_onto_the_message_not_the_source():
     """P2 keeps append-only but onto the inter-agent message's benign base; the
     external source stays benign."""
-    ctx = sc.self_collab_task_context(sc.SELF_COLLAB_TASKS[0])
+    ctx = at.agent_team_task_context(at.AGENT_TEAM_TASKS[0])
     assert ctx.supports_message_injection()
     # Active benign base switches by mode.
     assert ctx.active_benign("append_only") == ctx.benign_source_value
@@ -36,8 +35,8 @@ def test_p2_statement_is_inter_agent_message():
 def test_p2_generator_appends_to_the_handoff_message():
     gen = TemplatePayloadGenerator()
     gen.set_permission_mode("message_append")
-    spec_obj = sc.self_collab_mas_spec()
-    context = sc.self_collab_context()
+    spec_obj = at.agent_team_mas_spec()
+    context = at.agent_team_context()
     path = Grafter(Analyzer().build(spec_obj).mdg).rank_candidates(SearchConstraints())[0]
     spec = Dispatcher().bind(path=path, context=context, terminal_objective="x",
                              permissions=["p"], target_value="pass", allowed_edits="a")
@@ -62,7 +61,7 @@ class _CaptureTarget:
 def test_p2_executor_injects_message_and_keeps_source_benign():
     """Under P2 the attack replay leaves the external source benign and carries the
     injection only in the inter-agent message; under P1 it is the reverse."""
-    ctx = sc.self_collab_task_context(sc.SELF_COLLAB_TASKS[0])
+    ctx = at.agent_team_task_context(at.AGENT_TEAM_TASKS[0])
     marker = "INJECTED-NOTE-XYZ"
     p_msg = Payload(spec_id="s", spec_version=1,
                     content=str(ctx.benign_message_value) + "\n\n" + marker)
@@ -78,10 +77,10 @@ def test_p2_executor_injects_message_and_keeps_source_benign():
 
 
 def test_p2_campaign_propagates_permission_mode():
-    lib = ContextLibrary(); lib.add(dev_team_context())
-    camp = CoSACampaign(target=DevTeamTarget(policy=VulnerableTesterPolicy()),
+    lib = ContextLibrary(); lib.add(agent_team_context())
+    camp = CoSACampaign(target=AgentTeamTarget(policy=VulnerableTesterPolicy()),
                         context_library=lib)
-    report = camp.run(dev_team_mas_spec(),
+    report = camp.run(agent_team_mas_spec(),
                       CampaignConfig(terminal_objective="t", target_value="pass",
                                      permission_mode="message_append",
                                      budgets=Budgets(per_path_retries=5, global_attempts=20)))
@@ -116,16 +115,16 @@ def test_enforce_passes_conformant_payload():
 
 # -- Analyzer marking + validation ----------------------------------------- #
 def test_analyzer_marks_injectable_data_nodes():
-    result = Analyzer().build(td.tracedev_mas_spec())
+    result = Analyzer().build(at.agent_team_mas_spec())
     assert result.structurally_sound
     injectable = result.mdg.injectable_sources()
-    assert [n.id for n in injectable] == [td.SRC]
-    assert result.mdg.node(td.SRC).attacker_can_append
+    assert [n.id for n in injectable] == [at.SRC]
+    assert result.mdg.node(at.SRC).attacker_can_append
 
 
 def test_validate_flags_non_data_injectable_node():
     # Mark an OPERATION node as a permitted source -> must be flagged.
-    spec = dev_team_mas_spec()
+    spec = agent_team_mas_spec()
     spec.permitted_sources = ["O_run_oracle"]  # an operation, not data
     result = Analyzer().build(spec)
     assert not result.structurally_sound
@@ -134,24 +133,24 @@ def test_validate_flags_non_data_injectable_node():
 
 # -- Dispatcher writes the explicit permission ------------------------------ #
 def test_dispatcher_sets_canonical_append_only_permission():
-    mdg = Analyzer().build(sc.self_collab_mas_spec()).mdg
+    mdg = Analyzer().build(at.agent_team_mas_spec()).mdg
     path = Grafter(mdg).rank_candidates(SearchConstraints())[0]
-    spec = Dispatcher().bind(path=path, context=sc.self_collab_context(),
+    spec = Dispatcher().bind(path=path, context=at.agent_team_context(),
                              terminal_objective="x", permissions=["modify_source"],
                              target_value="pass",
                              allowed_edits="ATTACKER TRIES TO WIDEN THIS")
     # The free-text allowed_edits must be ignored in favor of the P1 statement.
     assert "P1 append-only" in spec.plan.allowed_edits
-    assert sc.SRC in spec.plan.allowed_edits
+    assert at.SRC in spec.plan.allowed_edits
     assert "ATTACKER TRIES TO WIDEN" not in spec.plan.allowed_edits
 
 
 # -- End to end: payloads stay append-only, report records the permission --- #
 def test_campaign_payloads_are_append_only_and_recorded():
     lib = ContextLibrary()
-    lib.add(dev_team_context())
-    campaign = CoSACampaign(DevTeamTarget(policy=VulnerableTesterPolicy()), lib)
-    report = campaign.run(dev_team_mas_spec(),
+    lib.add(agent_team_context())
+    campaign = CoSACampaign(AgentTeamTarget(policy=VulnerableTesterPolicy()), lib)
+    report = campaign.run(agent_team_mas_spec(),
                           CampaignConfig("risky code was committed", "completed",
                                          budgets=Budgets(5, 20)))
     assert report.injectable_sources  # the permission labeling is recorded
@@ -165,9 +164,9 @@ def test_campaign_retains_winning_payload_for_replay():
     """A successful campaign keeps the exact inducing payload (content, site and
     benign base) so the run can be replayed against the live victim later."""
     lib = ContextLibrary()
-    lib.add(dev_team_context())
-    campaign = CoSACampaign(DevTeamTarget(policy=VulnerableTesterPolicy()), lib)
-    report = campaign.run(dev_team_mas_spec(),
+    lib.add(agent_team_context())
+    campaign = CoSACampaign(AgentTeamTarget(policy=VulnerableTesterPolicy()), lib)
+    report = campaign.run(agent_team_mas_spec(),
                           CampaignConfig("risky code was committed", "completed",
                                          budgets=Budgets(5, 20)))
     assert report.success
@@ -188,10 +187,10 @@ def test_campaign_retains_winning_payload_for_replay():
 
 def test_campaign_without_success_has_no_winning_payload():
     lib = ContextLibrary()
-    lib.add(dev_team_context())
+    lib.add(agent_team_context())
     # A target that never adopts the injection -> no success, no winning payload.
-    campaign = CoSACampaign(DevTeamTarget(policy=VulnerableTesterPolicy()), lib)
-    report = campaign.run(dev_team_mas_spec(),
+    campaign = CoSACampaign(AgentTeamTarget(policy=VulnerableTesterPolicy()), lib)
+    report = campaign.run(agent_team_mas_spec(),
                           CampaignConfig("an outcome that never occurs", "completed",
                                          budgets=Budgets(1, 2)))
     if not report.success:

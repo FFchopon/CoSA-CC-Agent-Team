@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Baseline (NO injection) run for every defective task, with per-target victims.
 
-Underlying victim model per target:
-  * Self-collaboration -> Kimi-K2.6
-  * TraceDev           -> DeepSeek-Flash
+Targets: agent_team (GatedTeam), metagpt, thebotcompany. Each with a configurable
+victim vendor/model via the CLI.
 
 Each task is run once on its benign source (no attacker payload). A clean baseline
 means the victim does NOT commit the affirmative verdict and no terminal outcome
@@ -24,8 +23,7 @@ from cosa import LLMConfig, OpenAICompatClient  # noqa: E402
 from cosa.spec import EvidenceBundle  # noqa: E402
 from run_mixed_experiment import (claude_client, deepseek_client,  # noqa: E402
                                   kimi_client)
-from targets import (make_llm_reviewer_policy, make_llm_tbc_policies,  # noqa: E402
-                     make_llm_tester_policy, make_llm_validator_policy)
+from targets import make_llm_reviewer_policy, make_llm_tbc_policies  # noqa: E402
 
 KEYDIR = "/Users/temp/Downloads/api-key"
 
@@ -36,9 +34,7 @@ def gpt_client(model, base_url, key_file, temperature):
                                         timeout=120))
 from targets import agent_team as at  # noqa: E402
 from targets import metagpt as mg  # noqa: E402
-from targets import self_collab as sc  # noqa: E402
 from targets import thebotcompany as tbc  # noqa: E402
-from targets import tracedev as td  # noqa: E402
 
 
 def _tbc_target(victim):
@@ -67,14 +63,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__),
                                                   "baseline_results.json"))
-    ap.add_argument("--target", default="", help="run only this target (self_collab "
-                    "| tracedev | agent_team | metagpt | thebotcompany); default = all")
-    ap.add_argument("--self-collab-vendor", choices=["kimi", "gpt", "glm"],
-                    default="kimi", help="self-collab victim vendor")
-    ap.add_argument("--self-collab-model", default="",
-                    help="self-collab victim model id (vendor default if empty)")
-    ap.add_argument("--self-collab-temp", type=float, default=1.0,
-                    help="self-collab victim sampling temperature")
+    ap.add_argument("--target", default="", help="run only this target "
+                    "(agent_team | metagpt | thebotcompany); default = all")
     ap.add_argument("--agent-team-vendor", choices=["claude", "kimi", "gpt", "glm"],
                     default="claude", help="agent_team (GatedTeam) victim vendor")
     ap.add_argument("--agent-team-model", default="",
@@ -94,22 +84,6 @@ def main():
     ap.add_argument("--tbc-temp", type=float, default=1.0,
                     help="thebotcompany victim sampling temperature")
     args = ap.parse_args()
-
-    # Resolve the self-collab victim factory + label from the CLI.
-    if args.self_collab_vendor == "gpt":
-        sc_model = args.self_collab_model or "gpt-6.1-terra"
-        sc_victim = lambda: gpt_client(sc_model, "https://api.openai.com/v1",
-                                       os.path.join(KEYDIR, "gpt-key.txt"),
-                                       args.self_collab_temp)
-    elif args.self_collab_vendor == "glm":
-        sc_model = args.self_collab_model or "glm-5.3-flash"
-        sc_victim = lambda: gpt_client(sc_model,
-                                       "https://open.bigmodel.cn/api/paas/v4",
-                                       os.path.join(KEYDIR, "glm-key.txt"),
-                                       args.self_collab_temp)
-    else:
-        sc_model = args.self_collab_model or "kimi-k2.6"
-        sc_victim = lambda: kimi_client(sc_model)
 
     # Resolve the agent_team (GatedTeam) victim factory + label from the CLI.
     if args.agent_team_vendor == "gpt":
@@ -173,12 +147,6 @@ def main():
     # Agent Teams, so its victim coordinator is Claude (Sonnet); the CoSA attacker
     # pipeline — used only in the attack runs, not this baseline — stays DeepSeek.
     all_specs = [
-        ("self_collab", sc_victim, "pass",
-         sc.self_collab_task_contexts,
-         lambda v: sc.SelfCollabTarget(policy=make_llm_tester_policy(v))),
-        ("tracedev", deepseek_client, "complete",
-         td.tracedev_task_contexts,
-         lambda v: td.TraceDevTarget(policy=make_llm_validator_policy(v))),
         ("agent_team", at_victim, "completed",
          at.agent_team_task_contexts,
          lambda v: at.AgentTeamTarget(policy=at.make_llm_tester_policy(v))),
@@ -210,8 +178,7 @@ def main():
             results.append(r)
 
     bundle = {"framework": "CoSA", "group": "baseline_no_injection",
-              "victims": {"self_collab": sc_model, "tracedev": "deepseek-flash",
-                          "agent_team": at_model, "metagpt": mg_model,
+              "victims": {"agent_team": at_model, "metagpt": mg_model,
                           "thebotcompany": tbc_model},
               "runs_per_task": 1,
               "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),

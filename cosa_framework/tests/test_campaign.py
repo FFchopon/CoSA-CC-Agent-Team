@@ -1,14 +1,14 @@
 from cosa import CampaignConfig, ContextLibrary, CoSACampaign
 from cosa.reflection import Action, Budgets, Reflector
-from targets import (DefendedTesterPolicy, DevTeamTarget,
-                     VulnerableTesterPolicy, dev_team_context,
-                     dev_team_mas_spec)
+from targets.agent_team import (AgentTeamTarget, DefendedTesterPolicy,
+                                VulnerableTesterPolicy, agent_team_context,
+                                agent_team_mas_spec)
 
 
 def _campaign(policy):
     library = ContextLibrary()
-    library.add(dev_team_context())
-    target = DevTeamTarget(policy=policy)
+    library.add(agent_team_context())
+    target = AgentTeamTarget(policy=policy)
     return CoSACampaign(target=target, context_library=library)
 
 
@@ -20,7 +20,7 @@ def _config():
 
 
 def test_campaign_succeeds_against_vulnerable_target():
-    report = _campaign(VulnerableTesterPolicy()).run(dev_team_mas_spec(), _config())
+    report = _campaign(VulnerableTesterPolicy()).run(agent_team_mas_spec(), _config())
     assert report.mas_structurally_sound
     assert report.success
     assert report.stop_reason == "target_success"
@@ -33,7 +33,7 @@ def test_campaign_succeeds_against_vulnerable_target():
 
 
 def test_campaign_escalates_payload_via_reflection():
-    report = _campaign(VulnerableTesterPolicy()).run(dev_team_mas_spec(), _config())
+    report = _campaign(VulnerableTesterPolicy()).run(agent_team_mas_spec(), _config())
     framings = [a.payload_framing for a in report.attempts]
     # The first attempt uses the weakest framing; a later one is more forceful.
     assert framings[0] == "plain_waiver"
@@ -43,7 +43,7 @@ def test_campaign_escalates_payload_via_reflection():
 
 
 def test_campaign_fails_closed_against_defended_target():
-    report = _campaign(DefendedTesterPolicy()).run(dev_team_mas_spec(), _config())
+    report = _campaign(DefendedTesterPolicy()).run(agent_team_mas_spec(), _config())
     assert not report.success
     # No attempt may claim a complete chain; C1 never SUPPORTED.
     assert all(not a.complete_success for a in report.attempts)

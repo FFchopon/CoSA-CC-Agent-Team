@@ -8,12 +8,12 @@ from cosa.generator import TemplatePayloadGenerator
 from cosa.llm_agents import LLMGenerator
 from cosa.reflection import Action
 from cosa.spec import (EvidenceBundle, JudgeReport, Stage, StageVerdict, Verdict)
-from targets import self_collab as sc
+from targets import agent_team as at
 
 
 def _spec_ctx():
-    spec_obj = sc.self_collab_mas_spec()
-    context = sc.self_collab_context()
+    spec_obj = at.agent_team_mas_spec()
+    context = at.agent_team_context()
     path = Grafter(Analyzer().build(spec_obj).mdg).rank_candidates(SearchConstraints())[0]
     spec = Dispatcher().bind(path=path, context=context, terminal_objective="x",
                              permissions=["p"], target_value="pass", allowed_edits="a")

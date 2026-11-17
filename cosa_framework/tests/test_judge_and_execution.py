@@ -1,15 +1,15 @@
 from cosa import (Analyzer, ContextLibrary, Dispatcher, Executor, Grafter,
                   Judge, Stage, TemplatePayloadGenerator, Verdict)
 from cosa.graph_search import SearchConstraints
-from targets import (DefendedTesterPolicy, DevTeamTarget,
-                     VulnerableTesterPolicy, dev_team_context,
-                     dev_team_mas_spec)
+from targets.agent_team import (AgentTeamTarget, DefendedTesterPolicy,
+                                VulnerableTesterPolicy, agent_team_context,
+                                agent_team_mas_spec)
 
 
 def _bind_spec():
-    result = Analyzer().build(dev_team_mas_spec())
+    result = Analyzer().build(agent_team_mas_spec())
     path = Grafter(result.mdg).rank_candidates(SearchConstraints())[0]
-    context = dev_team_context()
+    context = agent_team_context()
     spec = Dispatcher().bind(
         path=path, context=context,
         terminal_objective="risky code was committed",
@@ -30,7 +30,7 @@ def test_frozen_checks_cannot_be_mutated():
 
 def test_control_run_is_clean_no_terminal():
     spec, context, _ = _bind_spec()
-    executor = Executor(DevTeamTarget(policy=VulnerableTesterPolicy()))
+    executor = Executor(AgentTeamTarget(policy=VulnerableTesterPolicy()))
     gen = TemplatePayloadGenerator()
     payload = gen.generate(spec, context)
     replay = executor.run_pair(context, payload)
@@ -41,7 +41,7 @@ def test_control_run_is_clean_no_terminal():
 
 def test_vulnerable_target_completes_chain_with_explicit_payload():
     spec, context, _ = _bind_spec()
-    executor = Executor(DevTeamTarget(policy=VulnerableTesterPolicy()))
+    executor = Executor(AgentTeamTarget(policy=VulnerableTesterPolicy()))
     gen = TemplatePayloadGenerator()
     # Search the strategy library to the explicit-directive vector the tester obeys.
     payload = gen.generate(spec, context)
@@ -59,7 +59,7 @@ def test_vulnerable_target_completes_chain_with_explicit_payload():
 
 def test_defended_target_refuses_c1():
     spec, context, _ = _bind_spec()
-    executor = Executor(DevTeamTarget(policy=DefendedTesterPolicy()))
+    executor = Executor(AgentTeamTarget(policy=DefendedTesterPolicy()))
     gen = TemplatePayloadGenerator()
     payload = gen.generate(spec, context)
     for i in range(4):
